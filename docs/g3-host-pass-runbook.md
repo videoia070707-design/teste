@@ -22,6 +22,8 @@ Antes de tocar na Meta, o ambiente precisa ter:
 
 - Supabase Free runtime saudável (`g3-runtime`, PGMQ, `pg_net`, Cron e heartbeat);
 - Edge Function pública `instagram-webhook` ativa e fail-closed sem configuração Meta;
+- Edge Function pública `instagram-data-deletion` ativa e protegida por `signed_request` HMAC;
+- migration 021 de Meta compliance presente no schema e no histórico hospedado;
 - Supabase Auth configurado;
 - dashboard web publicado em HTTPS em `APP_ORIGIN`;
 - `DATABASE_URL` do web usando a role least-privilege `automation_web`, nunca `postgres`;
@@ -56,13 +58,24 @@ No App Dashboard, configure exatamente os valores apresentados pelo Readiness Ce
 - OAuth redirect URI;
 - webhook callback URL;
 - Privacy Policy URL;
-- Data Deletion URL.
+- URL pública de instruções de exclusão quando o App Dashboard solicitar uma página informativa;
+- callback de Data Deletion quando o App Dashboard solicitar processamento programático.
 
-O webhook callback do G3 Free deve apontar para a Edge Function Supabase exibida pela UI, no formato:
+O webhook callback do G3 Free deve apontar para:
 
 `https://<project-ref>.supabase.co/functions/v1/instagram-webhook`
 
-Não aponte a Meta para a rota Next como caminho primário. O web Free pode hibernar; a Edge Function precisa continuar disponível para ingestão.
+O callback programático de exclusão deve apontar para:
+
+`https://<project-ref>.supabase.co/functions/v1/instagram-data-deletion`
+
+A página pública de instruções permanece:
+
+`<APP_ORIGIN>/legal/data-deletion`
+
+Não aponte a Meta para a rota Next como webhook primário. O web Free pode hibernar; callbacks do provider precisam continuar disponíveis no Supabase Edge.
+
+`instagram-data-deletion` usa `verify_jwt=false` porque a Meta não possui sessão Supabase. O POST só é aceito depois de validar o `signed_request` com HMAC-SHA256 usando o `meta_app_secret` real do Vault. A resposta de aceite retorna `url` de status e `confirmation_code`. Replays da mesma solicitação convergem para o mesmo receipt por fingerprint, em vez de criar deleções independentes.
 
 Registre em **External readiness** as confirmações operacionais. Attestations ajudam o acompanhamento, mas não passam o gate.
 
@@ -89,7 +102,8 @@ Fluxo esperado:
 7. Meta App Secret é obtido do Vault pela bridge allowlisted, não por variável pública;
 8. token é promovido ao formato long-lived suportado;
 9. credencial do Instagram é criptografada com o provider keyring;
-10. `channel_connections.auth_valid=true` somente depois da secret reference ser anexada.
+10. `channel_connections.auth_valid=true` somente depois da secret reference ser anexada;
+11. a identidade app-scoped retornada/confirmada pelo provider é mantida separada em `provider_subject_id` para callbacks de compliance, sem substituir a identidade de conta usada pela API.
 
 ### Evidência esperada
 
@@ -192,7 +206,23 @@ então o estado deve convergir para:
 
 A mensagem não volta automaticamente à fila. Reconciliação exige evidência externa + AuditLog.
 
-## 9. Evidência que deve ser preservada após o teste
+## 9. Data deletion — prova separada de compliance
+
+Data deletion não conta como evidência de HOST PASS de mensagens, mas precisa estar funcional antes de abrir o produto a usuários reais.
+
+Fluxo esperado:
+
+`Meta signed_request → instagram-data-deletion → HMAC verify → receipt hashed → exact provider_subject_id deletion → confirmation status`
+
+Regras:
+
+- nunca fazer fuzzy match por nome, username ou external account parecido;
+- nunca gravar o `signed_request` bruto nem o provider subject plaintext no receipt;
+- conexão legada sem `provider_subject_id` resolvível vai para `MANUAL_REVIEW`;
+- a solicitação repetida usa o mesmo fingerprint/receipt;
+- o status público não expõe identificadores internos, secrets ou identidade do usuário.
+
+## 10. Evidência que deve ser preservada após o teste
 
 - `channel_connections` da conexão oficial;
 - secret reference criptografada;
@@ -202,8 +232,10 @@ A mensagem não volta automaticamente à fila. Reconciliação exige evidência 
 - AuditLogs das ações manuais;
 - heartbeat do runtime durante a janela do teste.
 
+Para exclusão iniciada pelo provider, o receipt mínimo em `data_deletion_requests` substitui a retenção dos dados apagados e contém somente hashes, contadores, status e confirmation code.
+
 Não guardar tokens ou secrets em logs de aplicação genéricos.
 
-## 10. Critério para avançar ao G4
+## 11. Critério para avançar ao G4
 
-Somente depois de o dashboard derivar **G3 HOST PASS** com as provas acima, o roadmap libera implementação/validação do **G4 — WhatsApp Official**.
+Somente depois de o dashboard derivar **G3 HOST PASS** com as provas acima, e de os callbacks de compliance estarem configurados corretamente no App Meta, o roadmap libera implementação/validação do **G4 — WhatsApp Official**.
