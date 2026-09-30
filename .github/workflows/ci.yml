@@ -207,3 +207,13 @@ jobs:
         run: pnpm test
       - name: Build
         run: pnpm build
+      - name: Validate Docker Compose
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          rm .env
+      - name: Build runtime containers
+        run: |
+          docker build --build-arg SERVICE=@automation/web -t automation-web:ci .
+          docker build --build-arg SERVICE=@automation/worker-ingress -t automation-ingress:ci .
+          docker build --build-arg SERVICE=@automation/worker-outbound -t automation-outbound:ci .
