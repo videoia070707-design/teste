@@ -1,6 +1,6 @@
 # Deployment contract
 
-A plataforma não depende de Replit, Vercel ou de um único host. O runtime atual é dividido em três processos independentes e pode ser executado em qualquer ambiente compatível com containers e PostgreSQL.
+A plataforma não depende de Replit, Vercel ou de um único host. O runtime de produção é composto por três processos long-lived (`web`, `worker-ingress`, `worker-outbound`) e um processo operacional one-shot (`migrate`). Todos podem rodar em qualquer ambiente compatível com containers e PostgreSQL.
 
 ## Processos
 
@@ -17,7 +17,33 @@ Consome `webhook_ingress_events`, usa lease recuperável, normaliza eventos e pe
 ### `@automation/worker-outbound`
 Consome mensagens outbound, executa mutações do provider e preserva `SEND_RESULT_UNKNOWN` quando o outcome é ambíguo.
 
-Os dois workers tratam `SIGTERM`/`SIGINT` e encerram o pool do banco antes de sair. Deploys devem conceder tempo de shutdown, em vez de enviar `SIGKILL` imediatamente.
+Os dois workers usam um supervisor de runtime que:
+
+- mantém o mesmo `worker_id` usado pelas leases;
+- grava heartbeat periódico em `app_private.worker_heartbeats`;
+- encaminha `SIGTERM`/`SIGINT` para o processo real;
+- registra `stopped_at` quando o processo termina;
+- fecha a conexão PostgreSQL antes de sair.
+
+O dashboard Reliability classifica cada worker como `RUNNING`, `STALE`, `STOPPED` ou `NOT_SEEN`. Heartbeat é apenas evidência operacional e nunca conta como G3 HOST PASS.
+
+### Migration runner
+
+O comando:
+
+```bash
+pnpm --filter @automation/storage-postgres migrate
+```
+
+aplica o stream `database/*.sql` usando:
+
+- `pg_advisory_xact_lock` para impedir dois deploys concorrentes de alterar schema ao mesmo tempo;
+- ledger `app_private.schema_migrations`;
+- SHA-256 por arquivo;
+- recusa explícita se uma migration já aplicada for alterada;
+- transação para que uma falha não deixe o ledger parcialmente atualizado.
+
+Migration aplicada é imutável. Correções de schema devem sempre ser uma nova migration.
 
 ## Infraestrutura externa
 
@@ -39,6 +65,11 @@ Supabase é o adapter de Auth atual, não o host obrigatório da aplicação. We
 - `PROVIDER_SECRET_KEYS_JSON`
 - `INSTAGRAM_GRAPH_BASE_URL`
 - `INSTAGRAM_GRAPH_API_VERSION`
+
+### Migration runner
+
+- `DATABASE_URL`
+- `MIGRATIONS_DIR` (opcional; normalmente não deve ser alterado)
 
 ### Web
 
@@ -81,7 +112,7 @@ Além das compartilhadas:
 
 ## Docker
 
-O `Dockerfile` recebe `SERVICE` como build arg.
+O `Dockerfile` recebe `SERVICE` como build arg e instala dependências a partir do lockfile commitado.
 
 Exemplos:
 
@@ -91,23 +122,27 @@ docker build --build-arg SERVICE=@automation/worker-ingress -t automation-ingres
 docker build --build-arg SERVICE=@automation/worker-outbound -t automation-outbound .
 ```
 
-Para desenvolvimento/integracao do runtime:
+Para desenvolvimento/integração do runtime:
 
 ```bash
 cp .env.example .env
-# preencher apenas no ambiente local; nunca commitar .env
+# preencher apenas localmente; nunca commitar .env
+
+docker compose --profile ops run --rm migrate
 docker compose up --build
 ```
 
-O `compose.yaml` não cria um banco falso nem um Meta fake. Ele espera os serviços externos configurados por `.env`, justamente para não fazer o ambiente parecer pronto quando Auth/provider não estão realmente conectados.
+O serviço `migrate` fica atrás do profile `ops`: ele não roda automaticamente toda vez que `docker compose up` é executado.
+
+O `compose.yaml` não cria um banco falso nem um Meta fake. Ele espera serviços externos configurados por `.env`, justamente para não fazer o ambiente parecer pronto quando Auth/provider não estão realmente conectados.
 
 ## Ordem de rollout
 
-1. aplicar migrations em ordem;
+1. executar o migration runner;
 2. iniciar `web`;
 3. validar `/api/health/live` e `/api/health/ready`;
-4. iniciar `worker-ingress`;
-5. iniciar `worker-outbound`;
+4. iniciar `worker-ingress` e confirmar heartbeat recente;
+5. iniciar `worker-outbound` e confirmar heartbeat recente;
 6. abrir `/connections/instagram/readiness` e executar o preflight local;
 7. configurar URLs no App Dashboard da Meta;
 8. concluir OAuth real;
@@ -125,10 +160,12 @@ O `compose.yaml` não cria um banco falso nem um Meta fake. Ele espera os servi�
 - reverse proxies não podem transformar o corpo antes da validação HMAC;
 - `api/health/*` nunca retorna secrets, workspace IDs ou diagnóstico interno detalhado;
 - DB e secret store devem usar conexões privadas/TLS quando disponíveis;
-- rolling deploy deve respeitar `stop_grace_period` para evitar interrupção de leases em execução.
+- rolling deploy deve respeitar `stop_grace_period` para evitar interrupção de leases em execução;
+- migrations já registradas no ledger nunca devem ser editadas/regravadas;
+- migration runner é operação de deploy, não processo permanentemente exposto.
 
 ## Escala
 
-Workers podem ser replicados horizontalmente porque o claim usa lock/lease no banco. Aumentar réplicas não remove a necessidade de observar filas, latência, `SEND_RESULT_UNKNOWN`, dead letters e limites do provider.
+Workers podem ser replicados horizontalmente porque o claim usa lock/lease no banco. Cada réplica registra seu próprio heartbeat. Aumentar réplicas não remove a necessidade de observar filas, latência, `SEND_RESULT_UNKNOWN`, dead letters e limites do provider.
 
 Browser Lab não faz parte deste runtime de produção do G3. Ele continua isolado para G12–G13.
