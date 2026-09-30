@@ -39,14 +39,16 @@ jobs:
           forbidden = %w[
             PROVIDER_SECRET_KEYS_JSON
             PROVIDER_SECRET_CURRENT_KEY_VERSION
+            META_APP_SECRET
             META_WEBHOOK_VERIFY_TOKEN
+            META_WEBHOOK_SIGNATURE_HEADER
           ]
           leaked = keys & forbidden
           abort "Supabase/Vault-owned secrets leaked back into Render config: #{leaked.inspect}" unless leaked.empty?
 
           required = %w[
             SERVICE APP_ORIGIN NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-            DATABASE_URL META_APP_ID META_APP_SECRET
+            DATABASE_URL META_APP_ID
           ]
           missing = required - keys
           abort "required web env declarations missing: #{missing.inspect}" unless missing.empty?
