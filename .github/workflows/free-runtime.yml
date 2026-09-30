@@ -57,4 +57,4 @@ jobs:
           deno-version: v2.1.4
 
       - name: Typecheck Supabase Edge runtime
-        run: deno check supabase/functions/g3-runtime/index.ts
+        run: deno check --config supabase/functions/g3-runtime/deno.json supabase/functions/g3-runtime/index.ts
