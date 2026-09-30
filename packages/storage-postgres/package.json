@@ -12,6 +12,7 @@
     "./secrets": "./src/secrets.ts"
   },
   "scripts": {
+    "migrate": "node scripts/migrate.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.json --noEmit",
     "test": "node --test"
