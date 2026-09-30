@@ -12,6 +12,8 @@ export type StoredDeliveryState =
   | "DEAD"
   | "SEND_RESULT_UNKNOWN";
 
+export type OutboundConflictKind = "idempotency" | "idempotency_mismatch" | "resource_claim";
+
 export interface StoredOutboundMessage {
   id: string;
   workspaceId: string;
@@ -39,7 +41,7 @@ export class PostgresMessageStore {
     payload: unknown;
     messageType?: string;
     dedupeResourceKey?: string;
-  }): Promise<{ message: StoredOutboundMessage; created: boolean; conflictKind?: "idempotency" | "resource_claim" }> {
+  }): Promise<{ message: StoredOutboundMessage; created: boolean; conflictKind?: OutboundConflictKind }> {
     const messageType = input.messageType ?? "text";
     const dedupeResourceKey = input.dedupeResourceKey ?? null;
 
@@ -88,7 +90,15 @@ export class PostgresMessageStore {
 
     const byIdempotency = await this.getByIdempotencyKey(input.connectionId, input.idempotencyKey);
     if (byIdempotency) {
-      return { message: byIdempotency, created: false, conflictKind: "idempotency" };
+      const sameIntent = byIdempotency.messageType === messageType
+        && byIdempotency.dedupeResourceKey === dedupeResourceKey
+        && stableJson(byIdempotency.payload) === stableJson(input.payload);
+
+      return {
+        message: byIdempotency,
+        created: false,
+        conflictKind: sameIntent ? "idempotency" : "idempotency_mismatch"
+      };
     }
 
     if (dedupeResourceKey) {
@@ -254,6 +264,22 @@ function mapMessage(row: MessageRow): StoredOutboundMessage {
     lastErrorCode: row.last_error_code,
     payload: row.payload
   };
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(sortJson(value));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (typeof value !== "object" || value === null) return value;
+
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    const child = (value as Record<string, unknown>)[key];
+    if (child !== undefined) sorted[key] = sortJson(child);
+  }
+  return sorted;
 }
 
 function asJsonValue(value: unknown): never {
