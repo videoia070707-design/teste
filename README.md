@@ -34,10 +34,11 @@ Projeto Supabase Free do G3:
 - project ref: `cqtrigqlktekczbbsxiy`;
 - região: `sa-east-1` (São Paulo);
 - PostgreSQL 17;
-- migrations `001`–`018` aplicadas no fluxo do projeto;
+- core portátil `database/001–012` aplicado;
+- adapter Supabase Free `supabase/migrations/013–019` aplicado;
 - dados do produto isolados em `app_private`;
 - `anon` e `authenticated` sem acesso direto ao schema privado;
-- Security Advisor atualmente sem lints;
+- Security Advisor sem lints após o hardening do runtime;
 - Supabase Auth para identidade/sessão;
 - PGMQ/Supabase Queues para sinais duráveis de ingress e outbound;
 - `pg_net` para wake-up assíncrono do executor;
@@ -50,6 +51,15 @@ Projeto Supabase Free do G3:
 O runtime foi validado no projeto real: invocações da Edge Function retornam HTTP 200, filas permanecem vazias quando não há trabalho e o recovery Cron está ativo.
 
 **Não há worker pago obrigatório no G3 atual.** O antigo Blueprint do Render e seu CI específico foram removidos para evitar provisioning pago acidental.
+
+## Migrations: core x adapter
+
+Existem dois streams intencionalmente separados:
+
+- `database/001–012`: schema PostgreSQL portátil, validado também em PostgreSQL puro pelo CI;
+- `supabase/migrations/013–019`: adapter do runtime gratuito (`pgmq`, `pg_cron`, `pg_net`, Vault e heartbeat Edge).
+
+O CI falha se uma dependência Supabase vazar para `database/` ou se a sequência 013–019 do adapter ficar incompleta. O banco Supabase real usa o histórico nativo de migrations; o ledger checksummed `app_private.schema_migrations` pertence apenas ao migration runner portátil/fallback e não é executado contra o projeto real atual.
 
 ## Runtime G3 Free
 
@@ -115,7 +125,7 @@ A fila é um acelerador/wake-up. A correção do sistema continua apoiada no est
 - dashboard Reliability ligado ao banco real;
 - runtime primário Supabase Edge + PGMQ + Cron;
 - workers Docker equivalentes mantidos como fallback portátil;
-- CI com PostgreSQL real, migrations, invariants, typecheck, testes, build e containers.
+- CI com PostgreSQL real, migrations, invariants, typecheck, testes, build, containers e boundary gate do adapter Free.
 
 ## Instagram scopes do G3
 
@@ -156,6 +166,7 @@ Isso preserva independência do Supabase caso o volume futuro exija workers dedi
 
 - `apps/web`: dashboard, Auth, OAuth/callbacks, webhook e APIs
 - `supabase/functions/g3-runtime`: executor gratuito de ingress/outbound
+- `supabase/migrations`: adapter Supabase Free 013–019
 - `apps/worker-ingress`: fallback Docker para ingress
 - `apps/worker-outbound`: fallback Docker para outbound
 - `packages/core`: domínio/RBAC
@@ -164,7 +175,7 @@ Isso preserva independência do Supabase caso o volume futuro exija workers dedi
 - `packages/reliability`: estados, retry, idempotência, reconciliação
 - `packages/secrets`: AES-GCM/envelope encryption
 - `packages/storage-postgres`: stores server-only + migration runner de fallback
-- `database`: migrations imutáveis
+- `database`: migrations PostgreSQL portáveis 001–012
 - `docs`: gates, deployment e runbooks
 
 ## Próximos passos
