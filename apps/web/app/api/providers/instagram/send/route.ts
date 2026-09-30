@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { can, type ConnectionId, type WorkspaceRole } from "@automation/core";
-import { applyProviderSendResult, type MessageDeliverySnapshot } from "@automation/reliability";
+import { can, type WorkspaceRole } from "@automation/core";
 import { PostgresMessageStore } from "@automation/storage-postgres/messages";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
-import { getInstagramOfficialProvider } from "@/lib/server/instagram-provider";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -65,47 +63,14 @@ export async function POST(request: Request): Promise<Response> {
     }
   });
 
-  if (!creation.created) {
-    return Response.json({
-      duplicateRequest: true,
+  return Response.json(
+    {
+      duplicateRequest: !creation.created,
+      queued: creation.created,
       message: presentMessage(creation.message)
-    });
-  }
-
-  const processing = await store.markProcessing(creation.message.id);
-  const provider = getInstagramOfficialProvider();
-
-  try {
-    const result = await provider.sendText({
-      connectionId: connection.id as ConnectionId,
-      recipientExternalId: input.recipientExternalId,
-      text: input.text,
-      idempotencyKey,
-      correlationId
-    });
-
-    const snapshot = applyProviderSendResult(toSnapshot(processing), result);
-    const saved = await store.applyProviderOutcome({
-      messageId: processing.id,
-      deliveryState: snapshot.state,
-      reconciliationRequired: snapshot.reconciliationRequired,
-      ...(snapshot.providerMessageId ? { providerMessageId: snapshot.providerMessageId } : {}),
-      ...(snapshot.lastProviderTimestamp ? { providerTimestamp: snapshot.lastProviderTimestamp } : {}),
-      ...(snapshot.lastErrorCode ? { errorCode: snapshot.lastErrorCode } : {})
-    });
-
-    const status = saved.deliveryState === "FAILED" ? 422 : 202;
-    return Response.json({ duplicateRequest: false, message: presentMessage(saved) }, { status });
-  } catch {
-    const failed = await store.applyProviderOutcome({
-      messageId: processing.id,
-      deliveryState: "FAILED",
-      errorCode: "PROVIDER_PRE_DISPATCH_FAILURE",
-      reconciliationRequired: false
-    });
-
-    return Response.json({ error: "provider_pre_dispatch_failure", message: presentMessage(failed) }, { status: 502 });
-  }
+    },
+    { status: creation.created ? 202 : 200 }
+  );
 }
 
 interface SendBody {
@@ -129,22 +94,6 @@ function stringField(value: unknown, error: string, min: number, max: number): s
   const normalized = value.trim();
   if (normalized.length < min || normalized.length > max) throw new Error(error);
   return normalized;
-}
-
-function toSnapshot(message: {
-  deliveryState: MessageDeliverySnapshot["state"];
-  providerMessageId: string | null;
-  lastProviderTimestamp: string | null;
-  lastErrorCode: string | null;
-  reconciliationRequired: boolean;
-}): MessageDeliverySnapshot {
-  return {
-    state: message.deliveryState,
-    reconciliationRequired: message.reconciliationRequired,
-    ...(message.providerMessageId ? { providerMessageId: message.providerMessageId } : {}),
-    ...(message.lastProviderTimestamp ? { lastProviderTimestamp: message.lastProviderTimestamp } : {}),
-    ...(message.lastErrorCode ? { lastErrorCode: message.lastErrorCode } : {})
-  };
 }
 
 function presentMessage(message: {
