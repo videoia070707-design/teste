@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { can, type WorkspaceRole } from "@automation/core";
-import { verifyWebhookChallenge } from "@automation/provider-instagram-official";
 import { NextResponse } from "next/server";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
@@ -17,18 +16,23 @@ export async function POST(request: Request): Promise<Response> {
 
   const sql = getDatabase();
   const report = await buildInstagramReadinessReport(sql, membership.workspaceId);
-  const expectedToken = process.env.META_WEBHOOK_VERIFY_TOKEN?.trim() ?? "";
-  const challengeValue = `local-preflight-${randomUUID()}`;
-  const challengeResult = expectedToken
-    ? verifyWebhookChallenge({
-        mode: "subscribe",
-        token: expectedToken,
-        challenge: challengeValue,
-        expectedToken
-      })
-    : null;
+  const [secret] = await sql<{ decrypted_secret: string }[]>`
+    select decrypted_secret
+    from vault.decrypted_secrets
+    where name = 'meta_webhook_verify_token'
+    order by created_at desc
+    limit 1
+  `;
 
-  const challengeReady = challengeResult === challengeValue;
+  const challengeValue = `local-preflight-${randomUUID()}`;
+  const challengeReady = report.urls.webhookCallback && secret?.decrypted_secret
+    ? await verifyPublicEdgeChallenge(
+        report.urls.webhookCallback,
+        secret.decrypted_secret,
+        challengeValue
+      )
+    : false;
+
   const preflightReady = report.configurationReady && challengeReady;
   const correlationId = randomUUID();
 
@@ -51,6 +55,7 @@ export async function POST(request: Request): Promise<Response> {
       ${sql.json({
         configurationReady: report.configurationReady,
         webhookChallengeReady: challengeReady,
+        webhookTarget: report.urls.webhookCallback ? "supabase-edge" : "unavailable",
         hostPassAtRun: report.hostPass,
         hostPassEvidenceMutated: false
       })}
@@ -60,4 +65,33 @@ export async function POST(request: Request): Promise<Response> {
   const target = new URL("/connections/instagram/readiness", new URL(request.url).origin);
   target.searchParams.set("preflight", preflightReady ? "ready" : "blocked");
   return NextResponse.redirect(target, { status: 303 });
+}
+
+async function verifyPublicEdgeChallenge(
+  webhookUrl: string,
+  verifyToken: string,
+  challenge: string
+): Promise<boolean> {
+  const target = new URL(webhookUrl);
+  target.searchParams.set("hub.mode", "subscribe");
+  target.searchParams.set("hub.verify_token", verifyToken);
+  target.searchParams.set("hub.challenge", challenge);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    const response = await fetch(target, {
+      method: "GET",
+      redirect: "error",
+      cache: "no-store",
+      signal: controller.signal
+    });
+    if (!response.ok) return false;
+    return (await response.text()) === challenge;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
 }
