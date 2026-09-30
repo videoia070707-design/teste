@@ -1,6 +1,7 @@
 import "server-only";
 import { INSTAGRAM_LOGIN_SCOPES } from "@automation/provider-instagram-official";
 import type { DatabaseClient } from "@automation/storage-postgres";
+import { getPlatformSecrets } from "@/lib/server/platform-secrets";
 
 const PROVIDER_KEY = "instagram.meta.official";
 const EDGE_WEBHOOK_PATH = "/functions/v1/instagram-webhook";
@@ -184,16 +185,14 @@ async function readPlatformSecretReadiness(sql: DatabaseClient): Promise<{
   providerKeyringReady: boolean;
 }> {
   try {
-    const rows = await sql<{ name: string; decrypted_secret: string }[]>`
-      select name, decrypted_secret
-      from vault.decrypted_secrets
-      where name in ('meta_app_secret', 'meta_webhook_verify_token', 'provider_secret_keyring')
-    `;
-    const byName = new Map(rows.map((row) => [row.name, row.decrypted_secret]));
+    const secrets = await getPlatformSecrets(
+      ["meta_app_secret", "meta_webhook_verify_token", "provider_secret_keyring"],
+      sql
+    );
     return {
-      metaAppSecretReady: present(byName.get("meta_app_secret")),
-      webhookVerifyTokenReady: secureToken(byName.get("meta_webhook_verify_token")),
-      providerKeyringReady: validVaultProviderKeyring(byName.get("provider_secret_keyring"))
+      metaAppSecretReady: present(secrets.meta_app_secret),
+      webhookVerifyTokenReady: secureToken(secrets.meta_webhook_verify_token),
+      providerKeyringReady: validVaultProviderKeyring(secrets.provider_secret_keyring)
     };
   } catch {
     return {
