@@ -21,21 +21,22 @@ A documentação oficial atual descreve Instagram Login para contas profissionai
 Antes de tocar na Meta, o ambiente precisa ter:
 
 - Supabase Free runtime saudável (`g3-runtime`, PGMQ, `pg_net`, Cron e heartbeat);
-- Edge Function pública `instagram-webhook` ativa e fail-closed sem configuração Meta;
+- Edge Function pública `instagram-webhook` ativa;
 - Edge Function pública `instagram-data-deletion` ativa e protegida por `signed_request` HMAC;
-- migration 021 de Meta compliance presente no schema e no histórico hospedado;
+- migrations 021 (Meta compliance) e 022 (verify token hospedado) presentes;
 - Supabase Auth configurado;
 - dashboard web publicado em HTTPS em `APP_ORIGIN`;
 - `DATABASE_URL` do web usando a role least-privilege `automation_web`, nunca `postgres`;
 - conexão pública PostgreSQL criptografada (`sslmode=require` no mínimo);
 - `LEGAL_ENTITY_NAME` e `SUPPORT_EMAIL` configurados;
 - `provider_secret_keyring` no Supabase Vault;
-- `meta_app_secret` e `meta_webhook_verify_token` no Supabase Vault;
+- `meta_webhook_verify_token` gerado no Supabase Vault pela migration 022;
+- `meta_app_secret` real do App Meta no Supabase Vault antes de aceitar POSTs do provider;
 - `META_APP_ID` no web;
 - URLs OAuth/Graph/versionamento explícitas;
 - `INSTAGRAM_IDENTITY_PROBE_PATH` validado contra a API real;
 - Security Advisor sem lints;
-- CI principal, Free Runtime Adapter e Free Web Blueprint verdes.
+- CI principal, Free Runtime Adapter, Meta Compliance e Free Web Blueprint verdes.
 
 Docker ingress/outbound workers **não são pré-condição do G3 Free**. Eles são fallback portátil. O runtime primário é Supabase Edge + PGMQ + Cron.
 
@@ -47,7 +48,11 @@ Abra:
 
 A seção **Runtime configuration** precisa estar pronta. Em ambiente público, `DATABASE_URL TLS` deve estar `READY`.
 
-Execute **preflight**. O preflight chama o webhook Edge público com um challenge sintético e exige a resposta exata. Isso comprova configuração de rede/TLS/Function/Vault/challenge, mas **não cria raw event, canonical event, mensagem ou HOST PASS**.
+O verify token não é preenchido manualmente em arquivo/env: a migration 022 o gera aleatoriamente dentro do Vault. O valor só deve ser copiado de forma segura para o App Dashboard da Meta quando o challenge for configurado.
+
+Execute **preflight**. O preflight chama o webhook Edge público com um challenge sintético e exige a resposta exata. Isso comprova rede/TLS/Function/Vault/challenge, mas **não cria raw event, canonical event, mensagem ou HOST PASS**.
+
+O GET de challenge depende somente de `meta_webhook_verify_token`. Portanto, a URL/challenge pode ser validada antes do App Secret existir. Já o POST de webhook continua fail-closed até `meta_app_secret` existir e a assinatura HMAC ser válida.
 
 ## 1. Configurar o App Meta
 
@@ -117,12 +122,14 @@ Se falhar, não edite tabelas manualmente para “desbloquear” o gate.
 
 Configure no App Dashboard da Meta as assinaturas necessárias às capacidades do G3 — mensagens e comentários — conforme o produto disponibilizar para o app.
 
-O endpoint primário implementa:
+O endpoint primário implementa dois níveis de readiness independentes:
 
 - GET: challenge com `meta_webhook_verify_token` lido do Vault;
 - POST: HMAC SHA-256 sobre o **raw body** usando `meta_app_secret` lido do Vault.
 
-A Function está com `verify_jwt=false` porque a chamada vem da Meta, mas isso não significa endpoint sem autenticação: a autenticação é específica do provider. Sem secrets configurados, responde 503/fail-closed.
+A Function está com `verify_jwt=false` porque a chamada vem da Meta, mas isso não significa endpoint sem autenticação: a autenticação é específica do provider.
+
+Sem verify token, GET responde 503. Com verify token correto, o challenge responde 200 mesmo antes do App Secret existir. Sem App Secret, POST responde 503 e persiste zero eventos. Com App Secret configurado, POST só prossegue depois de validar a assinatura HMAC.
 
 ### Regra de persistência
 
@@ -220,7 +227,8 @@ Regras:
 - nunca gravar o `signed_request` bruto nem o provider subject plaintext no receipt;
 - conexão legada sem `provider_subject_id` resolvível vai para `MANUAL_REVIEW`;
 - a solicitação repetida usa o mesmo fingerprint/receipt;
-- o status público não expõe identificadores internos, secrets ou identidade do usuário.
+- o status público não expõe identificadores internos, secrets ou identidade do usuário;
+- o workflow `Meta Compliance` deve permanecer verde para provar isolamento de deleção e bloqueio para roles públicas.
 
 ## 10. Evidência que deve ser preservada após o teste
 
