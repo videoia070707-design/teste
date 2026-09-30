@@ -12,10 +12,19 @@ Plataforma SaaS de automação para Instagram e WhatsApp.
 - Reliability antes de expansão funcional
 - Gate PASS somente por evidência operacional
 - Least privilege por capability implementada
+- Runtime portátil: containers versionados, sem dependência estrutural de Replit/Vercel
 
 ## Fase atual
 
-G0–G2 estão concluídos no core. G3 — Instagram Official — está code-ready e em validação de host real.
+G0–G2 estão concluídos no core. G3 — Instagram Official — está **code-ready** e em preparação/validação de host real.
+
+Há três estados deliberadamente diferentes:
+
+1. **Code-ready** — domínio, provider, workers, segurança e testes estão implementados.
+2. **Deployment-ready** — migrations, containers, health checks, worker heartbeat e release artifacts passaram pelo CI e podem ser executados em infraestrutura compatível.
+3. **HOST PASS** — OAuth + webhook + inbound + outbound reais foram provados contra a Meta no mesmo workspace.
+
+Nenhum dos dois primeiros estados promove automaticamente o terceiro.
 
 O código atual já possui:
 
@@ -26,7 +35,7 @@ O código atual já possui:
 - webhook com validação de assinatura e persistência antes do ACK;
 - worker de ingress com lease, retry, deduplicação e collision guard;
 - normalização de `message.received`, `message.sent` e `comment.received`;
-- outbound worker separado do HTTP, com idempotência e `SEND_RESULT_UNKNOWN` para outcomes ambíguos;
+- outbound worker separado do HTTP, com idempotência semântica e `SEND_RESULT_UNKNOWN` para outcomes ambíguos;
 - DM, resposta pública a comentário e private reply/comment→DM pelo provider oficial;
 - claim único de private reply por comentário;
 - health center, capability evidence e reconciliação manual auditável;
@@ -34,7 +43,12 @@ O código atual já possui:
 - páginas públicas de Privacy Policy e Data Deletion que só ficam disponíveis quando identidade legal e contato estão configurados;
 - dashboard de Reliability e Overview ligados ao banco real;
 - G3 calculado por evidência: OAuth válido + webhook real `message.received` + DM outbound aceita com provider message ID;
-- CI com PostgreSQL real para migrations, invariantes, typecheck, testes e build.
+- web liveness/readiness endpoints;
+- heartbeat persistente dos workers e estados `RUNNING`, `STALE`, `STOPPED`, `NOT_SEEN`;
+- migration runner com advisory lock, ledger e checksum imutável;
+- Dockerfile único parametrizado por serviço + Compose para web/workers/migration operation;
+- release workflow que publica imagens versionadas no GHCR somente em tags `vX.Y.Z`;
+- CI com PostgreSQL real para migrations, migration runner idempotente, invariantes, typecheck, testes, build, Compose e imagens Docker.
 
 ### Instagram scopes do G3
 
@@ -46,7 +60,30 @@ O OAuth atual solicita apenas as permissões usadas pelas capacidades implementa
 
 `instagram_business_content_publish` fica separado como escopo opcional futuro. `content.publish` permanece indisponível até a função existir e ter seus próprios testes. Isso evita pedir permissão antecipadamente apenas porque a API a oferece.
 
-G3 **não deve ser marcado PASS apenas porque o código compila ou porque um checklist foi confirmado**. O status só muda quando as evidências de host real forem persistidas no workspace.
+G3 **não deve ser marcado PASS apenas porque o código compila, o container sobe ou um checklist foi confirmado**. O status só muda quando as evidências de host real forem persistidas no workspace.
+
+## Runtime
+
+Processos long-lived:
+
+- `@automation/web`
+- `@automation/worker-ingress`
+- `@automation/worker-outbound`
+
+Operação one-shot:
+
+- `@automation/storage-postgres migrate`
+
+Documentação completa: `docs/deployment.md`.
+
+Uma tag de release válida, por exemplo `v0.1.0`, prepara publicação das imagens:
+
+- `ghcr.io/<owner>/automation-migrate:v0.1.0`
+- `ghcr.io/<owner>/automation-web:v0.1.0`
+- `ghcr.io/<owner>/automation-worker-ingress:v0.1.0`
+- `ghcr.io/<owner>/automation-worker-outbound:v0.1.0`
+
+As imagens de release incluem SBOM/provenance e são portáveis para qualquer host de containers compatível.
 
 ## Estrutura
 
@@ -58,12 +95,12 @@ G3 **não deve ser marcado PASS apenas porque o código compila ou porque um che
 - `packages/provider-instagram-official`: adapter Meta/Instagram oficial
 - `packages/reliability`: estados, idempotência, retry e reconciliação
 - `packages/secrets`: envelope encryption e keyring
-- `packages/storage-postgres`: stores PostgreSQL server-only
-- `database`: migrations validadas no CI
-- `docs`: decisões arquiteturais e gates
+- `packages/storage-postgres`: stores PostgreSQL server-only + migration runner
+- `database`: migrations imutáveis validadas no CI
+- `docs`: decisões arquiteturais, gates e deployment contract
 
 ## Próximos gates
 
-- G3: fechar HOST PASS com uma conta Instagram profissional/App Meta reais
+- G3: obter **deployment-ready verde no HEAD** e fechar HOST PASS com uma conta Instagram profissional/App Meta reais
 - G4: WhatsApp Official — somente depois do G3 HOST PASS
 - G5: Unified Inbox + Contacts
