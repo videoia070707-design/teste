@@ -3,6 +3,7 @@ import { INSTAGRAM_LOGIN_SCOPES } from "@automation/provider-instagram-official"
 import type { DatabaseClient } from "@automation/storage-postgres";
 
 const PROVIDER_KEY = "instagram.meta.official";
+const EDGE_WEBHOOK_PATH = "/functions/v1/instagram-webhook";
 
 export type ReadinessState = "READY" | "BLOCKED" | "EXTERNAL";
 
@@ -44,35 +45,39 @@ export async function buildInstagramReadinessReport(
   workspaceId: string
 ): Promise<InstagramReadinessReport> {
   const origin = parseOrigin(process.env.APP_ORIGIN);
+  const supabaseOrigin = parseHttpsOrigin(process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const platformSecrets = await readPlatformSecretReadiness(sql);
+
   const urls = {
     appOrigin: origin,
     oauthRedirect: origin ? `${origin}/api/connections/instagram/callback` : null,
-    webhookCallback: origin ? `${origin}/api/providers/instagram/webhook` : null,
+    webhookCallback: supabaseOrigin ? `${supabaseOrigin}${EDGE_WEBHOOK_PATH}` : null,
     privacyPolicy: origin ? `${origin}/legal/privacy` : null,
     dataDeletion: origin ? `${origin}/legal/data-deletion` : null
   };
 
   const configuration: ReadinessCheck[] = [
-    envCheck("app_origin", "APP_ORIGIN", validPublicOrigin(process.env.APP_ORIGIN), "Origem canônica usada em callbacks OAuth e links públicos."),
-    envCheck("supabase_url", "NEXT_PUBLIC_SUPABASE_URL", validUrl(process.env.NEXT_PUBLIC_SUPABASE_URL), "Supabase Auth URL."),
+    envCheck("app_origin", "APP_ORIGIN", validPublicOrigin(process.env.APP_ORIGIN), "Origem canônica do dashboard e callback OAuth."),
+    envCheck("supabase_url", "NEXT_PUBLIC_SUPABASE_URL", validHttpsUrl(process.env.NEXT_PUBLIC_SUPABASE_URL), "Origem do Supabase Auth e do webhook Edge sempre disponível."),
     envCheck("supabase_key", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", present(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY), "Publishable key usada somente com Auth/RLS apropriados."),
-    envCheck("database", "DATABASE_URL", present(process.env.DATABASE_URL), "PostgreSQL server-only."),
+    envCheck("database", "DATABASE_URL", present(process.env.DATABASE_URL), "PostgreSQL server-only do web app."),
     envCheck(
       "database_transport",
       "DATABASE_URL TLS",
       secureDatabaseTransport(process.env.DATABASE_URL, process.env.APP_ORIGIN),
       "Ambiente público exige sslmode=require, verify-ca ou verify-full. Desenvolvimento local pode usar conexão local sem TLS."
     ),
-    envCheck("meta_app_id", "META_APP_ID", present(process.env.META_APP_ID), "ID do app Meta."),
-    envCheck("meta_app_secret", "META_APP_SECRET", present(process.env.META_APP_SECRET), "Secret configurado no ambiente server-only; o valor nunca é exibido."),
-    envCheck("webhook_verify_token", "META_WEBHOOK_VERIFY_TOKEN", secureToken(process.env.META_WEBHOOK_VERIFY_TOKEN), "Verify token do challenge de webhook."),
+    envCheck("meta_app_id", "META_APP_ID", present(process.env.META_APP_ID), "ID do App Meta usado pelo OAuth."),
+    envCheck("meta_app_secret_web", "META_APP_SECRET (OAuth web)", present(process.env.META_APP_SECRET), "Secret do App Meta no ambiente server-only do web; nunca é renderizado."),
+    envCheck("meta_app_secret_edge", "Meta App Secret no Supabase Vault", platformSecrets.metaAppSecretReady, "Mesmo App Secret usado pelo webhook Edge para HMAC; valor nunca sai do Vault."),
+    envCheck("webhook_verify_token_edge", "Webhook verify token no Supabase Vault", platformSecrets.webhookVerifyTokenReady, "Verify token forte usado pelo challenge público do webhook Edge."),
     envCheck("oauth_authorize", "INSTAGRAM_OAUTH_AUTHORIZE_URL", validHttpsUrl(process.env.INSTAGRAM_OAUTH_AUTHORIZE_URL), "Endpoint OAuth configurável."),
     envCheck("oauth_token", "INSTAGRAM_OAUTH_TOKEN_URL", validHttpsUrl(process.env.INSTAGRAM_OAUTH_TOKEN_URL), "Endpoint de troca de authorization code."),
     envCheck("long_lived_token", "INSTAGRAM_LONG_LIVED_TOKEN_URL", validHttpsUrl(process.env.INSTAGRAM_LONG_LIVED_TOKEN_URL), "Endpoint de troca para long-lived token."),
     envCheck("graph_base", "INSTAGRAM_GRAPH_BASE_URL", validHttpsUrl(process.env.INSTAGRAM_GRAPH_BASE_URL), "Base URL da API oficial."),
     envCheck("graph_version", "INSTAGRAM_GRAPH_API_VERSION", safeApiVersion(process.env.INSTAGRAM_GRAPH_API_VERSION), "Versão explícita; upgrades não são silenciosos."),
     envCheck("identity_probe", "INSTAGRAM_IDENTITY_PROBE_PATH", safeProbePath(process.env.INSTAGRAM_IDENTITY_PROBE_PATH), "Probe explícito necessário para health sem falso positivo."),
-    envCheck("secret_keyring", "PROVIDER_SECRET_KEYS_JSON", validProviderKeyring(), "Keyring válido deve conter a versão corrente e chave AES-256."),
+    envCheck("secret_keyring", "Provider AES keyring no Supabase Vault", platformSecrets.providerKeyringReady, "Keyring AES-256-GCM compartilhado pelo web e Edge runtime."),
     envCheck("legal_entity", "LEGAL_ENTITY_NAME", present(process.env.LEGAL_ENTITY_NAME), "Nome do operador exibido nas páginas legais."),
     envCheck("support_email", "SUPPORT_EMAIL", validEmail(process.env.SUPPORT_EMAIL), "Contato público para privacidade e exclusão de dados.")
   ];
@@ -173,6 +178,32 @@ export async function buildInstagramReadinessReport(
   };
 }
 
+async function readPlatformSecretReadiness(sql: DatabaseClient): Promise<{
+  metaAppSecretReady: boolean;
+  webhookVerifyTokenReady: boolean;
+  providerKeyringReady: boolean;
+}> {
+  try {
+    const rows = await sql<{ name: string; decrypted_secret: string }[]>`
+      select name, decrypted_secret
+      from vault.decrypted_secrets
+      where name in ('meta_app_secret', 'meta_webhook_verify_token', 'provider_secret_keyring')
+    `;
+    const byName = new Map(rows.map((row) => [row.name, row.decrypted_secret]));
+    return {
+      metaAppSecretReady: present(byName.get("meta_app_secret")),
+      webhookVerifyTokenReady: secureToken(byName.get("meta_webhook_verify_token")),
+      providerKeyringReady: validVaultProviderKeyring(byName.get("provider_secret_keyring"))
+    };
+  } catch {
+    return {
+      metaAppSecretReady: false,
+      webhookVerifyTokenReady: false,
+      providerKeyringReady: false
+    };
+  }
+}
+
 function envCheck(key: string, label: string, ready: boolean, detail: string): ReadinessCheck {
   return { key, label, state: ready ? "READY" : "BLOCKED", detail };
 }
@@ -183,16 +214,6 @@ function evidenceCheck(key: string, label: string, ready: boolean, detail: strin
 
 function present(value: string | undefined): boolean {
   return Boolean(value?.trim());
-}
-
-function validUrl(value: string | undefined): boolean {
-  if (!value?.trim()) return false;
-  try {
-    new URL(value);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function validHttpsUrl(value: string | undefined): boolean {
@@ -218,6 +239,11 @@ function validPublicOrigin(value: string | undefined): boolean {
 
 function parseOrigin(value: string | undefined): string | null {
   if (!validPublicOrigin(value)) return null;
+  return new URL(value as string).origin;
+}
+
+function parseHttpsOrigin(value: string | undefined): string | null {
+  if (!validHttpsUrl(value)) return null;
   return new URL(value as string).origin;
 }
 
@@ -270,15 +296,16 @@ function validEmail(value: string | undefined): boolean {
   return Boolean(value && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()));
 }
 
-function validProviderKeyring(): boolean {
-  const current = process.env.PROVIDER_SECRET_CURRENT_KEY_VERSION?.trim();
-  const raw = process.env.PROVIDER_SECRET_KEYS_JSON?.trim();
-  if (!current || !raw) return false;
+function validVaultProviderKeyring(raw: string | undefined): boolean {
+  if (!raw?.trim()) return false;
 
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return false;
-    const encoded = parsed[current];
+    const currentVersion = parsed.currentVersion;
+    const keys = parsed.keys;
+    if (typeof currentVersion !== "string" || !isRecord(keys)) return false;
+    const encoded = keys[currentVersion];
     if (typeof encoded !== "string") return false;
     return Buffer.from(encoded, "base64").length === 32;
   } catch {
