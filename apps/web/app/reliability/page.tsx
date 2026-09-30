@@ -4,10 +4,11 @@ import { getDatabase } from "@/lib/server/database";
 
 export const dynamic = "force-dynamic";
 
-type WorkerService = "worker-ingress" | "worker-outbound";
+type RuntimeKind = "supabase_g3_runtime" | "worker-ingress" | "worker-outbound";
 
-interface WorkerHeartbeatRow {
-  service: WorkerService;
+interface RuntimeHeartbeatRow {
+  worker_kind: RuntimeKind | string;
+  service: string | null;
   started_at: string;
   last_seen_at: string;
   stopped_at: string | null;
@@ -86,19 +87,19 @@ export default async function ReliabilityPage() {
     limit 8
   `;
 
-  // Worker registry is global operational state, not tenant data. Deliberately
-  // select no worker_id/metadata/hostname so tenant-facing UI only receives an
-  // aggregate service health signal.
-  const workerHeartbeats = await sql<WorkerHeartbeatRow[]>`
+  // Runtime registry is global operational state, not tenant data. Do not expose
+  // worker IDs, hostnames or metadata to tenant-facing UI.
+  const runtimeHeartbeats = await sql<RuntimeHeartbeatRow[]>`
     select
+      coalesce(worker_kind, service) as worker_kind,
       service,
       started_at,
       last_seen_at,
       stopped_at,
-      (stopped_at is null and last_seen_at >= now() - interval '30 seconds') as fresh
+      (last_seen_at >= now() - interval '30 seconds') as fresh
     from app_private.worker_heartbeats
     order by last_seen_at desc
-    limit 20
+    limit 30
   `;
 
   const values = metrics ?? {
@@ -108,9 +109,11 @@ export default async function ReliabilityPage() {
     dead_ingress: 0
   };
 
-  const ingressState = summarizeWorker(workerHeartbeats, "worker-ingress");
-  const outboundState = summarizeWorker(workerHeartbeats, "worker-outbound");
-  const runtimeHealthy = ingressState.status === "RUNNING" && outboundState.status === "RUNNING";
+  const edgeState = summarizeRuntime(runtimeHeartbeats, "supabase_g3_runtime", true);
+  const ingressState = summarizeRuntime(runtimeHeartbeats, "worker-ingress", false);
+  const outboundState = summarizeRuntime(runtimeHeartbeats, "worker-outbound", false);
+  const dockerFallbackHealthy = ingressState.status === "RUNNING" && outboundState.status === "RUNNING";
+  const runtimeHealthy = edgeState.status === "ACTIVE" || dockerFallbackHealthy;
 
   return (
     <>
@@ -122,7 +125,7 @@ export default async function ReliabilityPage() {
         </div>
         <span className={`badge ${runtimeHealthy ? "accent" : "warning"}`}>
           <span className={`status-dot ${runtimeHealthy ? "healthy" : "warning"}`} />
-          {runtimeHealthy ? "Workers healthy" : "Worker attention"}
+          {runtimeHealthy ? "Runtime healthy" : "Runtime attention"}
         </span>
       </header>
 
@@ -151,17 +154,27 @@ export default async function ReliabilityPage() {
 
       <section className="section">
         <div className="section-head">
-          <div><div className="eyebrow">Runtime workers</div><h2>Heartbeat operacional</h2></div>
-          <p>fresh window: 30s</p>
+          <div><div className="eyebrow">Free runtime</div><h2>Execução operacional</h2></div>
+          <p>heartbeat window: 30s</p>
         </div>
-        <div className="grid two">
-          <WorkerCard label="Ingress worker" state={ingressState} />
-          <WorkerCard label="Outbound worker" state={outboundState} />
-        </div>
+        <RuntimeCard label="Supabase Edge Runtime" state={edgeState} primary />
         <div className="notice" style={{ marginTop: 14 }}>
-          Heartbeat comprova processo ativo; não conta como G3 HOST PASS e não substitui evidência de OAuth, webhook real ou envio real.
+          G3 usa Supabase Edge + PGMQ + Cron como runtime principal no plano gratuito. Heartbeat comprova execução recente; não conta como HOST PASS e não substitui OAuth, webhook real ou envio real.
         </div>
       </section>
+
+      {(ingressState.status !== "NOT_SEEN" || outboundState.status !== "NOT_SEEN") && (
+        <section className="section">
+          <div className="section-head">
+            <div><div className="eyebrow">Optional fallback</div><h2>Docker workers</h2></div>
+            <p>não necessários no G3 Free</p>
+          </div>
+          <div className="grid two">
+            <RuntimeCard label="Ingress worker" state={ingressState} />
+            <RuntimeCard label="Outbound worker" state={outboundState} />
+          </div>
+        </section>
+      )}
 
       <section className="section grid two">
         <article className="card">
@@ -252,14 +265,17 @@ export default async function ReliabilityPage() {
   );
 }
 
-function WorkerCard({
+function RuntimeCard({
   label,
-  state
+  state,
+  primary = false
 }: {
   label: string;
-  state: ReturnType<typeof summarizeWorker>;
+  state: ReturnType<typeof summarizeRuntime>;
+  primary?: boolean;
 }) {
-  const badgeClass = state.status === "RUNNING" ? "good" : state.status === "STALE" ? "warn" : "muted";
+  const healthy = state.status === "ACTIVE" || state.status === "RUNNING";
+  const badgeClass = healthy ? "good" : state.status === "STALE" ? "warn" : "muted";
   return (
     <article className="card compact">
       <div className="connection-head">
@@ -267,21 +283,23 @@ function WorkerCard({
           <div className="eyebrow">{label}</div>
           <h2>{state.status}</h2>
         </div>
-        <span className={`badge ${badgeClass}`}>{state.instances} active instance{state.instances === 1 ? "" : "s"}</span>
+        <span className={`badge ${badgeClass}`}>{primary ? "primary" : `${state.instances} active instance${state.instances === 1 ? "" : "s"}`}</span>
       </div>
       <div className="key-value"><span>Last signal</span><strong>{state.lastSeenAt ? formatDate(state.lastSeenAt) : "never"}</strong></div>
     </article>
   );
 }
 
-function summarizeWorker(rows: WorkerHeartbeatRow[], service: WorkerService) {
-  const matches = rows.filter((row) => row.service === service);
-  const running = matches.filter((row) => row.fresh && row.stopped_at === null);
-  const latest = running[0] ?? matches[0] ?? null;
+function summarizeRuntime(rows: RuntimeHeartbeatRow[], kind: RuntimeKind, shortLived: boolean) {
+  const matches = rows.filter((row) => row.worker_kind === kind || row.service === kind);
+  const fresh = matches.filter((row) => row.fresh && (shortLived || row.stopped_at === null));
+  const latest = fresh[0] ?? matches[0] ?? null;
 
   return {
-    status: running.length > 0 ? "RUNNING" as const : latest?.stopped_at ? "STOPPED" as const : latest ? "STALE" as const : "NOT_SEEN" as const,
-    instances: running.length,
+    status: fresh.length > 0
+      ? shortLived ? "ACTIVE" as const : "RUNNING" as const
+      : latest ? "STALE" as const : "NOT_SEEN" as const,
+    instances: fresh.length,
     lastSeenAt: latest?.last_seen_at ?? null
   };
 }
