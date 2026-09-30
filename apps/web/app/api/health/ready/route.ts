@@ -17,8 +17,18 @@ export async function GET(): Promise<Response> {
         current_user::text as role_name,
         coalesce((select rolsuper from pg_roles where rolname = current_user), false) as is_superuser,
         coalesce((select rolbypassrls from pg_roles where rolname = current_user), false) as bypasses_rls,
-        has_schema_privilege(current_user, 'vault', 'usage') as vault_direct_access,
-        has_function_privilege(current_user, 'app_private.get_platform_secret(text)', 'execute') as platform_secret_bridge
+        coalesce(
+          has_schema_privilege(current_user, to_regnamespace('vault'), 'usage'),
+          false
+        ) as vault_direct_access,
+        coalesce(
+          has_function_privilege(
+            current_user,
+            to_regprocedure('app_private.get_platform_secret(text)'),
+            'execute'
+          ),
+          false
+        ) as platform_secret_bridge
     `;
 
     if (!database) return notReady("database");
