@@ -94,6 +94,7 @@ jobs:
             workspace_id uuid;
             connection_id uuid;
             actor_user_id uuid := gen_random_uuid();
+            heartbeat_seen timestamptz;
           begin
             if has_schema_privilege('anon', 'app_private', 'USAGE') then
               raise exception 'anon must not have USAGE on app_private';
@@ -153,6 +154,41 @@ jobs:
               'confirmed',
               actor_user_id
             );
+
+            insert into app_private.worker_heartbeats (
+              service,
+              worker_id,
+              metadata
+            ) values (
+              'worker-ingress',
+              'ci-worker-1',
+              '{"source":"ci"}'::jsonb
+            );
+
+            select last_seen_at into heartbeat_seen
+            from app_private.worker_heartbeats
+            where service = 'worker-ingress'
+              and worker_id = 'ci-worker-1'
+              and stopped_at is null;
+
+            if heartbeat_seen is null then
+              raise exception 'active worker heartbeat was not persisted';
+            end if;
+
+            update app_private.worker_heartbeats
+            set stopped_at = now(), last_seen_at = now()
+            where service = 'worker-ingress'
+              and worker_id = 'ci-worker-1';
+
+            if not exists (
+              select 1
+              from app_private.worker_heartbeats
+              where service = 'worker-ingress'
+                and worker_id = 'ci-worker-1'
+                and stopped_at is not null
+            ) then
+              raise exception 'worker stop evidence was not persisted';
+            end if;
 
             insert into app_private.channel_connections (
               workspace_id,
@@ -230,10 +266,11 @@ jobs:
       - name: Validate Docker Compose
         run: |
           cp .env.example .env
-          docker compose config --quiet
+          docker compose --profile ops config --quiet
           rm .env
       - name: Build runtime containers
         run: |
+          docker build --build-arg SERVICE=@automation/storage-postgres -t automation-migrate:ci .
           docker build --build-arg SERVICE=@automation/web -t automation-web:ci .
           docker build --build-arg SERVICE=@automation/worker-ingress -t automation-ingress:ci .
           docker build --build-arg SERVICE=@automation/worker-outbound -t automation-outbound:ci .
