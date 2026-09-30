@@ -1,6 +1,9 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
-import { normalizeInstagramMessageWebhook } from "@automation/provider-instagram-official/webhooks";
+import {
+  normalizeInstagramCommentWebhook,
+  normalizeInstagramMessageWebhook
+} from "@automation/provider-instagram-official/webhooks";
 import { createDatabaseClient, type DatabaseClient } from "@automation/storage-postgres";
 
 const PROVIDER_KEY = "instagram.meta.official";
@@ -25,6 +28,15 @@ interface ResolvedConnection {
   id: string;
   workspaceId: string;
   authValid: boolean;
+}
+
+interface CanonicalIngressEvent {
+  providerEventId: string;
+  accountId: string;
+  occurredAt: string;
+  eventType: "message.received" | "message.sent" | "comment.received";
+  payload: Record<string, unknown>;
+  raw: unknown;
 }
 
 class SuspiciousEventCollisionError extends Error {
@@ -158,10 +170,10 @@ async function processIngress(sql: DatabaseClient, ingress: ClaimedIngress): Pro
   }
 
   try {
-    const events = normalizeInstagramMessageWebhook(ingress.parsedPayload);
+    const events = normalizeSupportedEvents(ingress.parsedPayload);
 
     if (events.length === 0) {
-      await markResolved(sql, ingress.id, "NO_MESSAGE_EVENTS");
+      await markResolved(sql, ingress.id, "NO_SUPPORTED_EVENTS");
       return;
     }
 
@@ -174,7 +186,7 @@ async function processIngress(sql: DatabaseClient, ingress: ClaimedIngress): Pro
         continue;
       }
 
-      await persistCanonicalMessage(sql, ingress, connection, event);
+      await persistCanonicalEvent(sql, ingress, connection, event);
     }
 
     if (unmatched) {
@@ -192,6 +204,41 @@ async function processIngress(sql: DatabaseClient, ingress: ClaimedIngress): Pro
     const message = error instanceof Error ? error.message : "UNKNOWN_INGRESS_ERROR";
     await reschedule(sql, ingress, "FAILED", message);
   }
+}
+
+function normalizeSupportedEvents(payload: unknown): CanonicalIngressEvent[] {
+  const messages: CanonicalIngressEvent[] = normalizeInstagramMessageWebhook(payload).map((event) => ({
+    providerEventId: event.providerEventId,
+    accountId: event.accountId,
+    occurredAt: event.occurredAt,
+    eventType: event.isEcho ? "message.sent" : "message.received",
+    payload: {
+      senderExternalId: event.senderId,
+      recipientExternalId: event.recipientId,
+      providerMessageId: event.messageId ?? null,
+      text: event.text ?? null,
+      isEcho: event.isEcho,
+      attachments: event.attachments ?? []
+    },
+    raw: event.raw
+  }));
+
+  const comments: CanonicalIngressEvent[] = normalizeInstagramCommentWebhook(payload).map((event) => ({
+    providerEventId: event.providerEventId,
+    accountId: event.accountId,
+    occurredAt: event.occurredAt,
+    eventType: "comment.received",
+    payload: {
+      commentId: event.commentId,
+      mediaId: event.mediaId,
+      text: event.text ?? null,
+      commenterExternalId: event.commenterId ?? null,
+      commenterUsername: event.commenterUsername ?? null
+    },
+    raw: event.raw
+  }));
+
+  return [...messages, ...comments];
 }
 
 async function resolveConnection(sql: DatabaseClient, accountId: string): Promise<ResolvedConnection | null> {
@@ -216,11 +263,11 @@ async function resolveConnection(sql: DatabaseClient, accountId: string): Promis
   };
 }
 
-async function persistCanonicalMessage(
+async function persistCanonicalEvent(
   sql: DatabaseClient,
   ingress: ClaimedIngress,
   connection: ResolvedConnection,
-  event: ReturnType<typeof normalizeInstagramMessageWebhook>[number]
+  event: CanonicalIngressEvent
 ): Promise<void> {
   const fingerprint = createHash("sha256").update(stableJson(event.raw)).digest("hex");
 
@@ -269,54 +316,11 @@ async function persistCanonicalMessage(
       if (!existing) throw new Error("RAW_EVENT_CONFLICT_WITHOUT_ROW");
       if (existing.fingerprint !== fingerprint) throw new SuspiciousEventCollisionError();
 
-      await tx`
-        insert into app_private.connection_webhook_evidence (
-          connection_id,
-          last_verified_event_at,
-          consecutive_valid_events,
-          consecutive_invalid_events,
-          updated_at
-        ) values (
-          ${connection.id},
-          ${event.occurredAt},
-          1,
-          0,
-          now()
-        )
-        on conflict (connection_id)
-        do update set
-          last_verified_event_at = greatest(
-            coalesce(app_private.connection_webhook_evidence.last_verified_event_at, excluded.last_verified_event_at),
-            excluded.last_verified_event_at
-          ),
-          consecutive_valid_events = app_private.connection_webhook_evidence.consecutive_valid_events + 1,
-          consecutive_invalid_events = 0,
-          updated_at = now()
-      `;
-
-      await tx`
-        update app_private.channel_connections
-        set
-          webhook_healthy = true,
-          last_event_at = greatest(coalesce(last_event_at, ${event.occurredAt}), ${event.occurredAt}),
-          health_state = case when auth_valid then 'HEALTHY' else 'AUTH_EXPIRED' end,
-          updated_at = now()
-        where id = ${connection.id}
-      `;
+      await recordWebhookEvidence(tx, connection, event.occurredAt);
       return;
     }
 
-    const eventType = event.isEcho ? "message.sent" : "message.received";
     const correlationId = randomUUID();
-    const canonicalPayload = {
-      senderExternalId: event.senderId,
-      recipientExternalId: event.recipientId,
-      providerMessageId: event.messageId ?? null,
-      text: event.text ?? null,
-      isEcho: event.isEcho,
-      attachments: event.attachments ?? []
-    };
-
     const [canonical] = await tx<{ id: string }[]>`
       insert into app_private.canonical_events (
         raw_event_id,
@@ -334,14 +338,14 @@ async function persistCanonicalMessage(
         ${rawEventId},
         ${connection.workspaceId},
         ${connection.id},
-        ${eventType},
+        ${event.eventType},
         'instagram',
         ${PROVIDER_KEY},
         ${event.providerEventId},
         ${correlationId},
         ${event.occurredAt},
         ${ingress.firstReceivedAt},
-        ${tx.json(asJsonValue(canonicalPayload))}
+        ${tx.json(asJsonValue(event.payload))}
       )
       returning id
     `;
@@ -357,12 +361,12 @@ async function persistCanonicalMessage(
         payload
       ) values (
         ${connection.workspaceId},
-        ${eventType},
+        ${event.eventType},
         'canonical_event',
         ${canonical.id},
         ${tx.json(asJsonValue({
           canonicalEventId: canonical.id,
-          eventType,
+          eventType: event.eventType,
           connectionId: connection.id,
           correlationId
         }))}
@@ -375,41 +379,55 @@ async function persistCanonicalMessage(
       where id = ${rawEventId}
     `;
 
-    await tx`
-      insert into app_private.connection_webhook_evidence (
-        connection_id,
-        last_verified_event_at,
-        consecutive_valid_events,
-        consecutive_invalid_events,
-        updated_at
-      ) values (
-        ${connection.id},
-        ${event.occurredAt},
-        1,
-        0,
-        now()
-      )
-      on conflict (connection_id)
-      do update set
-        last_verified_event_at = greatest(
-          coalesce(app_private.connection_webhook_evidence.last_verified_event_at, excluded.last_verified_event_at),
-          excluded.last_verified_event_at
-        ),
-        consecutive_valid_events = app_private.connection_webhook_evidence.consecutive_valid_events + 1,
-        consecutive_invalid_events = 0,
-        updated_at = now()
-    `;
-
-    await tx`
-      update app_private.channel_connections
-      set
-        webhook_healthy = true,
-        last_event_at = greatest(coalesce(last_event_at, ${event.occurredAt}), ${event.occurredAt}),
-        health_state = case when auth_valid then 'HEALTHY' else 'AUTH_EXPIRED' end,
-        updated_at = now()
-      where id = ${connection.id}
-    `;
+    await recordWebhookEvidence(tx, connection, event.occurredAt);
   });
+}
+
+async function recordWebhookEvidence(
+  tx: Parameters<Parameters<DatabaseClient["begin"]>[0]>[0],
+  connection: ResolvedConnection,
+  occurredAt: string
+): Promise<void> {
+  await tx`
+    insert into app_private.connection_webhook_evidence (
+      connection_id,
+      last_verified_event_at,
+      consecutive_valid_events,
+      consecutive_invalid_events,
+      updated_at
+    ) values (
+      ${connection.id},
+      ${occurredAt},
+      1,
+      0,
+      now()
+    )
+    on conflict (connection_id)
+    do update set
+      last_verified_event_at = greatest(
+        coalesce(app_private.connection_webhook_evidence.last_verified_event_at, excluded.last_verified_event_at),
+        excluded.last_verified_event_at
+      ),
+      consecutive_valid_events = app_private.connection_webhook_evidence.consecutive_valid_events + 1,
+      consecutive_invalid_events = 0,
+      updated_at = now()
+  `;
+
+  // A valid webhook proves the webhook path, not the provider identity/token
+  // probe. Never manufacture HEALTHY from webhook evidence alone.
+  await tx`
+    update app_private.channel_connections
+    set
+      webhook_healthy = true,
+      last_event_at = greatest(coalesce(last_event_at, ${occurredAt}), ${occurredAt}),
+      health_state = case
+        when not auth_valid then 'AUTH_EXPIRED'
+        when health_state = 'AUTH_EXPIRED' then 'STALE'
+        else health_state
+      end,
+      updated_at = now()
+    where id = ${connection.id}
+  `;
 }
 
 async function markResolved(sql: DatabaseClient, ingressId: string, note: string | null): Promise<void> {
