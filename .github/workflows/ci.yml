@@ -24,6 +24,7 @@ jobs:
           --health-retries=10
     env:
       TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/automation_ci
+      MIGRATION_RUNNER_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/automation_migrate_ci
       PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +67,25 @@ jobs:
             echo "Applying $migration"
             psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
           done
+      - name: Validate production migration runner
+        run: |
+          set -euo pipefail
+          createdb -h 127.0.0.1 -U postgres automation_migrate_ci
+          psql "$MIGRATION_RUNNER_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          create schema if not exists auth;
+          create table if not exists auth.users (
+            id uuid primary key,
+            email text,
+            created_at timestamptz not null default now()
+          );
+          SQL
+
+          DATABASE_URL="$MIGRATION_RUNNER_DATABASE_URL" pnpm --filter @automation/storage-postgres migrate
+          DATABASE_URL="$MIGRATION_RUNNER_DATABASE_URL" pnpm --filter @automation/storage-postgres migrate
+
+          expected="$(find database -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' | wc -l | tr -d ' ')"
+          actual="$(psql "$MIGRATION_RUNNER_DATABASE_URL" -At -v ON_ERROR_STOP=1 -c 'select count(*) from app_private.schema_migrations')"
+          test "$actual" = "$expected"
       - name: Validate database invariants
         run: |
           psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
