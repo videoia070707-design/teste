@@ -3,6 +3,7 @@ import type { DatabaseClient } from "./index";
 
 export interface OAuthSessionRecord {
   workspaceId: string;
+  initiatedByUserId: string;
   redirectAfter: string | null;
 }
 
@@ -11,6 +12,7 @@ export class PostgresOAuthSessionStore {
 
   async create(input: {
     workspaceId: string;
+    initiatedByUserId: string;
     provider: string;
     state: string;
     redirectAfter?: string;
@@ -18,6 +20,7 @@ export class PostgresOAuthSessionStore {
   }): Promise<void> {
     const ttlSeconds = input.ttlSeconds ?? 600;
     if (ttlSeconds < 60 || ttlSeconds > 1800) throw new Error("INVALID_OAUTH_TTL");
+    if (!input.initiatedByUserId.trim()) throw new Error("OAUTH_ACTOR_REQUIRED");
     if (input.redirectAfter && !isSafeRelativePath(input.redirectAfter)) throw new Error("INVALID_REDIRECT_PATH");
 
     const stateHash = hashState(input.state);
@@ -25,12 +28,14 @@ export class PostgresOAuthSessionStore {
     await this.sql`
       insert into app_private.oauth_sessions (
         workspace_id,
+        initiated_by_user_id,
         provider,
         state_hash,
         redirect_after,
         expires_at
       ) values (
         ${input.workspaceId},
+        ${input.initiatedByUserId},
         ${input.provider},
         ${stateHash},
         ${input.redirectAfter ?? null},
@@ -39,26 +44,29 @@ export class PostgresOAuthSessionStore {
     `;
   }
 
-  async consume(provider: string, state: string): Promise<OAuthSessionRecord | null> {
+  async consume(provider: string, state: string, userId: string): Promise<OAuthSessionRecord | null> {
     const stateHash = hashState(state);
 
     return this.sql.begin(async (tx) => {
       const [row] = await tx<{
         workspace_id: string;
+        initiated_by_user_id: string;
         redirect_after: string | null;
       }[]>`
         update app_private.oauth_sessions
         set consumed_at = now()
         where provider = ${provider}
           and state_hash = ${stateHash}
+          and initiated_by_user_id = ${userId}
           and consumed_at is null
           and expires_at > now()
-        returning workspace_id, redirect_after
+        returning workspace_id, initiated_by_user_id, redirect_after
       `;
 
       if (!row) return null;
       return {
         workspaceId: row.workspace_id,
+        initiatedByUserId: row.initiated_by_user_id,
         redirectAfter: row.redirect_after
       };
     });
