@@ -16,7 +16,35 @@ Componentes:
 
 Nenhum background worker pago é necessário para o G3 Free.
 
-### Modelo de execução
+## Streams de migration
+
+O schema foi dividido deliberadamente para manter portabilidade:
+
+### Core PostgreSQL portátil
+
+`database/001–012`
+
+Contém domínio, reliability, ingress/outbound state, OAuth state, health, audit e índices. Não pode depender de `pgmq`, `pg_cron`, `pg_net` ou Vault. O CI aplica este stream em PostgreSQL puro e também testa o migration runner com ledger/checksum.
+
+### Adapter Supabase Free
+
+`supabase/migrations/013–019`
+
+Contém somente capacidades específicas do runtime gratuito atual:
+
+- PGMQ queues e triggers;
+- token interno no Vault;
+- keyring AES no Vault;
+- provider runtime config server-only;
+- heartbeat genérico para Edge/Cron;
+- `pg_net` wake-up;
+- Cron de recovery;
+- hardening de `search_path`/`pg_net`;
+- identidade estável do heartbeat Edge.
+
+O projeto Supabase real usa o histórico nativo de migrations. O ledger `app_private.schema_migrations` é exclusivo do runner portátil e **não deve ser criado/adotado no banco Supabase atual sem um procedimento explícito de reconciliação**.
+
+## Modelo de execução
 
 Quando um webhook é persistido:
 
@@ -137,7 +165,7 @@ Ainda existem:
 
 Eles preservam portabilidade para self-hosting/escala futura. **Não são requisitos do G3 Free e não devem ser provisionados em um serviço pago durante esta fase sem pedido explícito do usuário.**
 
-O migration runner Docker também continua como ferramenta de fallback. Como o Supabase real já foi provisionado pelo fluxo nativo de migrations, não executar o runner legado contra esse banco sem antes reconciliar seu ledger `app_private.schema_migrations`.
+O migration runner Docker continua como ferramenta de fallback e opera somente o stream `database/001–012`.
 
 ## Ordem atual para fechar G3
 
