@@ -12,6 +12,14 @@ COPY database ./database
 RUN pnpm install --frozen-lockfile
 
 ARG SERVICE
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+
+# These two values are intentionally public browser configuration. Never add
+# private provider/database secrets as Docker build args.
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
+ENV NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=$NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+
 RUN test -n "$SERVICE" && pnpm --filter "$SERVICE" build
 
 ENV NODE_ENV=production
