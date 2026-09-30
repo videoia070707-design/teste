@@ -134,7 +134,7 @@ begin
   where s.id = any(v_secret_ids);
   get diagnostics v_deleted_secret_envelopes = row_count;
 
-  -- Capades remove capabilities, secret refs, webhook evidence, raw/canonical
+  -- Cascades remove capabilities, secret refs, webhook evidence, raw/canonical
   -- events and messages through the existing foreign keys.
   delete from app_private.channel_connections c
   where c.id = any(v_connection_ids);
