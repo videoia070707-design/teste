@@ -1,5 +1,7 @@
 import postgres from "postgres";
 
+export * from "./oauth";
+
 export type DatabaseClient = ReturnType<typeof postgres>;
 
 export interface WebhookIngressInput {
