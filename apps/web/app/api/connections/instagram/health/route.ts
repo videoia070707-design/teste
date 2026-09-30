@@ -3,7 +3,7 @@ import type { ConnectionHealthState, ProviderConnection } from "@automation/prov
 import { NextResponse } from "next/server";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
-import { getInstagramServerConfig } from "@/lib/server/instagram";
+import { getInstagramApiConfig } from "@/lib/server/instagram";
 import { getInstagramOfficialProvider } from "@/lib/server/instagram-provider";
 
 export const runtime = "nodejs";
@@ -82,7 +82,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const provider = getInstagramOfficialProvider();
   const probe = await provider.verifyConnection(providerConnection);
-  const config = getInstagramServerConfig();
+  const config = getInstagramApiConfig();
   const finalState = combineHealth({
     probeState: probe.state,
     authValid: probe.authValid,
