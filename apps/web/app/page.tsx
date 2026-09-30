@@ -1,5 +1,7 @@
 import { requireWorkspaceContext } from "@/lib/server/auth";
 
+export const dynamic = "force-dynamic";
+
 const metrics = [
   ["Connected channels", "0", "G3/G4 onboarding pending credentials"],
   ["Canonical events", "0", "Durable event pipeline initialized"],
