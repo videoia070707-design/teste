@@ -56,5 +56,14 @@ jobs:
         with:
           deno-version: v2.1.4
 
-      - name: Typecheck Supabase Edge runtime
-        run: deno check --config supabase/functions/g3-runtime/deno.json supabase/functions/g3-runtime/index.ts
+      - name: Typecheck Supabase Edge functions
+        shell: bash
+        run: |
+          set -euo pipefail
+          for function_dir in supabase/functions/*; do
+            test -d "$function_dir" || continue
+            test -f "$function_dir/index.ts" || continue
+            test -f "$function_dir/deno.json"
+            echo "Checking $function_dir"
+            deno check --config "$function_dir/deno.json" "$function_dir/index.ts"
+          done
