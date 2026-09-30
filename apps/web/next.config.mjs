@@ -3,7 +3,9 @@ const nextConfig = {
   transpilePackages: [
     "@automation/core",
     "@automation/providers",
-    "@automation/reliability"
+    "@automation/provider-instagram-official",
+    "@automation/reliability",
+    "@automation/storage-postgres"
   ]
 };
 
