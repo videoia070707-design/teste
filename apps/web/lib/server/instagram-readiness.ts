@@ -57,6 +57,12 @@ export async function buildInstagramReadinessReport(
     envCheck("supabase_url", "NEXT_PUBLIC_SUPABASE_URL", validUrl(process.env.NEXT_PUBLIC_SUPABASE_URL), "Supabase Auth URL."),
     envCheck("supabase_key", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", present(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY), "Publishable key usada somente com Auth/RLS apropriados."),
     envCheck("database", "DATABASE_URL", present(process.env.DATABASE_URL), "PostgreSQL server-only."),
+    envCheck(
+      "database_transport",
+      "DATABASE_URL TLS",
+      secureDatabaseTransport(process.env.DATABASE_URL, process.env.APP_ORIGIN),
+      "Ambiente público exige sslmode=require, verify-ca ou verify-full. Desenvolvimento local pode usar conexão local sem TLS."
+    ),
     envCheck("meta_app_id", "META_APP_ID", present(process.env.META_APP_ID), "ID do app Meta."),
     envCheck("meta_app_secret", "META_APP_SECRET", present(process.env.META_APP_SECRET), "Secret configurado no ambiente server-only; o valor nunca é exibido."),
     envCheck("webhook_verify_token", "META_WEBHOOK_VERIFY_TOKEN", secureToken(process.env.META_WEBHOOK_VERIFY_TOKEN), "Verify token do challenge de webhook."),
@@ -204,7 +210,7 @@ function validPublicOrigin(value: string | undefined): boolean {
     const url = new URL(value);
     if (url.pathname !== "/" || url.search || url.hash) return false;
     if (url.protocol === "https:") return true;
-    return url.protocol === "http:" && (url.hostname === "localhost" || url.hostname === "127.0.0.1");
+    return url.protocol === "http:" && isLocalHostname(url.hostname);
   } catch {
     return false;
   }
@@ -213,6 +219,37 @@ function validPublicOrigin(value: string | undefined): boolean {
 function parseOrigin(value: string | undefined): string | null {
   if (!validPublicOrigin(value)) return null;
   return new URL(value as string).origin;
+}
+
+function secureDatabaseTransport(databaseUrl: string | undefined, appOrigin: string | undefined): boolean {
+  if (!databaseUrl?.trim()) return false;
+
+  try {
+    const database = new URL(databaseUrl);
+    if (database.protocol !== "postgresql:" && database.protocol !== "postgres:") return false;
+
+    const localApp = appOrigin ? isLocalOrigin(appOrigin) : false;
+    const localDatabase = isLocalHostname(database.hostname);
+    if (localApp && localDatabase) return true;
+
+    const sslMode = database.searchParams.get("sslmode")?.toLowerCase();
+    return sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full";
+  } catch {
+    return false;
+  }
+}
+
+function isLocalOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" && isLocalHostname(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isLocalHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
 }
 
 function secureToken(value: string | undefined): boolean {
