@@ -1,171 +1,155 @@
 # Deployment contract
 
-A plataforma não depende de Replit, Vercel ou de um único host. O runtime de produção é composto por três processos long-lived (`web`, `worker-ingress`, `worker-outbound`) e um processo operacional one-shot (`migrate`). Todos podem rodar em qualquer ambiente compatível com containers e PostgreSQL.
+A plataforma continua provider-independent e portátil, mas o **runtime padrão do G3 durante desenvolvimento/HOST PASS é gratuito**.
 
-## Processos
+## Runtime primário — Supabase Free
 
-### `@automation/web`
-Responsável por dashboard, Supabase Auth SSR, OAuth/callbacks, APIs protegidas, webhook público e health endpoints.
+Componentes:
 
-- liveness: `GET /api/health/live`
-- readiness: `GET /api/health/ready`
-- porta padrão: `3000`
+- PostgreSQL / `app_private`: fonte de verdade;
+- Supabase Auth: identidade e sessão;
+- PGMQ / Supabase Queues: sinais duráveis de wake-up;
+- `pg_net`: invocação assíncrona do executor;
+- `pg_cron`: recovery/retry sweep a cada 15 segundos;
+- Edge Function `g3-runtime`: executor curto de ingress + outbound;
+- Supabase Vault: token interno de runtime e keyring AES-256-GCM.
 
-### `@automation/worker-ingress`
-Consome `webhook_ingress_events`, usa lease recuperável, normaliza eventos e persiste `raw_events`, `canonical_events` e outbox.
+Nenhum background worker pago é necessário para o G3 Free.
 
-### `@automation/worker-outbound`
-Consome mensagens outbound, executa mutações do provider e preserva `SEND_RESULT_UNKNOWN` quando o outcome é ambíguo.
+### Modelo de execução
 
-Os dois workers usam um supervisor de runtime que:
+Quando um webhook é persistido:
 
-- mantém o mesmo `worker_id` usado pelas leases;
-- grava heartbeat periódico em `app_private.worker_heartbeats`;
-- encaminha `SIGTERM`/`SIGINT` para o processo real;
-- registra `stopped_at` quando o processo termina;
-- fecha a conexão PostgreSQL antes de sair.
+1. `webhook_ingress_events` recebe o envelope antes do ACK do provider;
+2. trigger envia um sinal para `instagram_ingress` (PGMQ);
+3. trigger faz wake-up assíncrono do `g3-runtime` via `pg_net`;
+4. Edge Function faz claim usando o estado/lease da tabela autoritativa;
+5. normaliza e persiste `raw_events`, `canonical_events` e outbox;
+6. sinal de fila é removido depois do processamento;
+7. se o wake-up falhar, o Cron recupera linhas prontas diretamente do banco.
 
-O dashboard Reliability classifica cada worker como `RUNNING`, `STALE`, `STOPPED` ou `NOT_SEEN`. Heartbeat é apenas evidência operacional e nunca conta como G3 HOST PASS.
+Outbound usa a mesma ideia:
 
-### Migration runner
+1. API cria `messages` em `QUEUED` com idempotency/resource claim;
+2. trigger sinaliza `instagram_outbound`;
+3. Edge Function faz claim e muda para `PROCESSING`;
+4. chama a Meta;
+5. outcome definitivo vira `SENT`, `FAILED` ou `RETRYING`;
+6. timeout/5xx/transport ambíguo vira `SEND_RESULT_UNKNOWN`;
+7. falha de persistência depois do dispatch preserva a lease; expiração posterior também vira `SEND_RESULT_UNKNOWN`.
 
-O comando:
+A PGMQ é um acelerador de entrega, não a única fonte de verdade. Isso permite recovery mesmo se o sinal da fila se perder.
 
-```bash
-pnpm --filter @automation/storage-postgres migrate
-```
+## Cron e orçamento do Free tier
 
-aplica o stream `database/*.sql` usando:
+O job `g3-runtime-recovery` roda a cada 15 segundos. O wake-up imediato acontece apenas quando há trabalho novo.
 
-- `pg_advisory_xact_lock` para impedir dois deploys concorrentes de alterar schema ao mesmo tempo;
-- ledger `app_private.schema_migrations`;
-- SHA-256 por arquivo;
-- recusa explícita se uma migration já aplicada for alterada;
-- transação para que uma falha não deixe o ledger parcialmente atualizado.
+O desenho evita processos 24/7 e permanece dentro do objetivo de desenvolvimento/HOST PASS no plano gratuito. Frequência, batch size e estratégia serão reavaliados com métricas reais antes de beta público.
 
-Migration aplicada é imutável. Correções de schema devem sempre ser uma nova migration.
+## Segredos
 
-## Infraestrutura externa
+### Supabase Vault — padrão
 
-A implementação atual usa:
+- `g3_runtime_cron_token`: token aleatório usado entre Postgres/pg_net e a Edge Function;
+- `provider_secret_keyring`: JSON do keyring AES-256-GCM usado para criptografar/decriptar credenciais de providers.
 
-- PostgreSQL para dados do produto;
-- Supabase Auth para identidade e sessão do usuário;
-- Meta/Instagram APIs para o provider oficial;
-- secret manager do ambiente de deploy para todas as variáveis sensíveis.
+O token plaintext não fica em tabelas de produto. `app_private.runtime_invocation_tokens` guarda somente SHA-256 para validação.
 
-Supabase é o adapter de Auth atual, não o host obrigatório da aplicação. Web e workers continuam containers independentes.
-
-## Variáveis por processo
-
-### Compartilhadas
-
-- `DATABASE_URL`
-- `PROVIDER_SECRET_CURRENT_KEY_VERSION`
-- `PROVIDER_SECRET_KEYS_JSON`
-- `INSTAGRAM_GRAPH_BASE_URL`
-- `INSTAGRAM_GRAPH_API_VERSION`
-
-### Migration runner
-
-- `DATABASE_URL`
-- `MIGRATIONS_DIR` (opcional; normalmente não deve ser alterado)
-
-### Web
-
-Além das compartilhadas:
+### Variáveis externas ainda necessárias no web
 
 - `APP_ORIGIN`
 - `NEXT_PUBLIC_SUPABASE_URL`
 - `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+- `DATABASE_URL`
 - `META_APP_ID`
 - `META_APP_SECRET`
 - `META_WEBHOOK_VERIFY_TOKEN`
 - `META_WEBHOOK_SIGNATURE_HEADER`
+- `INSTAGRAM_GRAPH_BASE_URL`
+- `INSTAGRAM_GRAPH_API_VERSION`
+- `INSTAGRAM_IDENTITY_PROBE_PATH`
 - `INSTAGRAM_OAUTH_AUTHORIZE_URL`
 - `INSTAGRAM_OAUTH_TOKEN_URL`
 - `INSTAGRAM_OAUTH_TOKEN_ENCODING`
 - `INSTAGRAM_LONG_LIVED_TOKEN_URL`
-- `INSTAGRAM_IDENTITY_PROBE_PATH`
 - `LEGAL_ENTITY_NAME`
 - `SUPPORT_EMAIL`
 
-### Ingress worker
+O keyring via `PROVIDER_SECRET_CURRENT_KEY_VERSION` / `PROVIDER_SECRET_KEYS_JSON` é apenas fallback legado/self-hosting. No caminho Supabase Free, o web usa o Vault.
 
-- `DATABASE_URL`
-- `INGRESS_WORKER_BATCH_SIZE`
-- `INGRESS_WORKER_POLL_MS`
-- `INGRESS_WORKER_LEASE_SECONDS`
-- `INGRESS_WORKER_ID` (opcional; gerado automaticamente quando ausente)
+## Web
 
-### Outbound worker
+`apps/web` continua Next.js e fornece:
 
-- `DATABASE_URL`
-- `PROVIDER_SECRET_CURRENT_KEY_VERSION`
-- `PROVIDER_SECRET_KEYS_JSON`
-- `INSTAGRAM_GRAPH_BASE_URL`
-- `INSTAGRAM_GRAPH_API_VERSION`
-- `OUTBOUND_WORKER_BATCH_SIZE`
-- `OUTBOUND_WORKER_POLL_MS`
-- `OUTBOUND_WORKER_LEASE_SECONDS`
-- `OUTBOUND_WORKER_ID` (opcional; gerado automaticamente quando ausente)
+- dashboard;
+- Supabase Auth SSR;
+- OAuth/callbacks da Meta;
+- webhook público com raw body/HMAC;
+- APIs protegidas;
+- health/readiness;
+- páginas legais.
 
-## Docker
+O HOST PASS exige uma URL HTTPS pública. Durante esta fase só devemos escolher hospedagem com tier gratuito; o executor assíncrono permanece no Supabase e não depende do host do web.
 
-O `Dockerfile` recebe `SERVICE` como build arg e instala dependências a partir do lockfile commitado.
+## Edge Function
 
-Exemplos:
+Fonte versionada:
 
-```bash
-docker build --build-arg SERVICE=@automation/web -t automation-web .
-docker build --build-arg SERVICE=@automation/worker-ingress -t automation-ingress .
-docker build --build-arg SERVICE=@automation/worker-outbound -t automation-outbound .
-```
+`supabase/functions/g3-runtime/index.ts`
 
-Para desenvolvimento/integração do runtime:
+A função usa `SUPABASE_DB_URL` fornecida pelo próprio ambiente Supabase. A rota é protegida por token interno próprio (`x-runtime-token`) verificado por hash server-only, então o deploy atual não depende de sessão de usuário para chamadas de Cron/pg_net.
 
-```bash
-cp .env.example .env
-# preencher apenas localmente; nunca commitar .env
+A Function não é evidência de G3 HOST PASS. HTTP 200 prova somente runtime operacional.
 
-docker compose --profile ops run --rm migrate
-docker compose up --build
-```
+## Reliability invariants
 
-O serviço `migrate` fica atrás do profile `ops`: ele não roda automaticamente toda vez que `docker compose up` é executado.
+- webhook persistido antes do ACK;
+- idempotência por provider event ID;
+- fingerprint incompatível → `SUSPICIOUS_EVENT_COLLISION`;
+- leases recuperáveis;
+- retry apenas para rejeição comprovadamente retryable;
+- provider 5xx/timeout/transport pós-dispatch = outcome ambíguo;
+- `SEND_RESULT_UNKNOWN` nunca retorna automaticamente para fila;
+- private reply com claim único por comentário;
+- reconciliation exige evidência e audit log.
 
-O `compose.yaml` não cria um banco falso nem um Meta fake. Ele espera serviços externos configurados por `.env`, justamente para não fazer o ambiente parecer pronto quando Auth/provider não estão realmente conectados.
+## Segurança
 
-## Ordem de rollout
+- `app_private` permanece server-only;
+- `anon`/`authenticated` não recebem `USAGE` no schema;
+- `pg_net` instalado no schema `extensions` conforme recomendação do Supabase;
+- funções SECURITY DEFINER têm `search_path` explícito;
+- secrets não usam `NEXT_PUBLIC_`;
+- Vault e envelopes nunca são retornados ao frontend;
+- webhook HMAC usa raw body;
+- runtime token não é HOST PASS evidence;
+- Security Advisor deve permanecer sem lints antes de qualquer mudança de gate.
 
-1. executar o migration runner;
-2. iniciar `web`;
-3. validar `/api/health/live` e `/api/health/ready`;
-4. iniciar `worker-ingress` e confirmar heartbeat recente;
-5. iniciar `worker-outbound` e confirmar heartbeat recente;
-6. abrir `/connections/instagram/readiness` e executar o preflight local;
-7. configurar URLs no App Dashboard da Meta;
-8. concluir OAuth real;
-9. enviar DM real para a conta de teste e confirmar `message.received`;
-10. responder pela plataforma e confirmar `provider_message_id`;
-11. somente então permitir que o próprio sistema derive `G3 HOST PASS`.
+## Fallback Docker opcional
 
-## Regras de segurança de deploy
+Ainda existem:
 
-- nenhum secret deve usar prefixo `NEXT_PUBLIC_`;
-- `APP_ORIGIN` deve ser HTTPS em ambiente público;
-- workers não devem ficar expostos à internet;
-- somente o `web` recebe tráfego externo;
-- webhook deve chegar diretamente ao `web` ou a um proxy que preserve o raw body sem mutá-lo;
-- reverse proxies não podem transformar o corpo antes da validação HMAC;
-- `api/health/*` nunca retorna secrets, workspace IDs ou diagnóstico interno detalhado;
-- DB e secret store devem usar conexões privadas/TLS quando disponíveis;
-- rolling deploy deve respeitar `stop_grace_period` para evitar interrupção de leases em execução;
-- migrations já registradas no ledger nunca devem ser editadas/regravadas;
-- migration runner é operação de deploy, não processo permanentemente exposto.
+- `apps/worker-ingress`;
+- `apps/worker-outbound`;
+- `Dockerfile`;
+- `compose.yaml`;
+- workflow de imagens GHCR.
 
-## Escala
+Eles preservam portabilidade para self-hosting/escala futura. **Não são requisitos do G3 Free e não devem ser provisionados em um serviço pago durante esta fase sem pedido explícito do usuário.**
 
-Workers podem ser replicados horizontalmente porque o claim usa lock/lease no banco. Cada réplica registra seu próprio heartbeat. Aumentar réplicas não remove a necessidade de observar filas, latência, `SEND_RESULT_UNKNOWN`, dead letters e limites do provider.
+O migration runner Docker também continua como ferramenta de fallback. Como o Supabase real já foi provisionado pelo fluxo nativo de migrations, não executar o runner legado contra esse banco sem antes reconciliar seu ledger `app_private.schema_migrations`.
 
-Browser Lab não faz parte deste runtime de produção do G3. Ele continua isolado para G12–G13.
+## Ordem atual para fechar G3
+
+1. manter Supabase Free runtime saudável;
+2. manter Security Advisor sem lints;
+3. publicar `apps/web` em URL HTTPS usando tier gratuito;
+4. configurar callback do Supabase Auth;
+5. configurar App Meta real e URLs do Readiness Center;
+6. concluir OAuth real com conta Instagram Business/Creator;
+7. receber webhook real assinado e confirmar `message.received`;
+8. enviar resposta real pela plataforma;
+9. confirmar `provider_message_id`;
+10. somente então permitir `G3 HOST PASS`.
+
+Browser Lab continua fora do G3 e só entra em G12–G13.
