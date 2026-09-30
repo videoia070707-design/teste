@@ -9,20 +9,33 @@ permissions:
 
 jobs:
   lockfile:
-    if: ${{ hashFiles('pnpm-lock.yaml') == '' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check whether lockfile exists
+        id: lockfile
+        shell: bash
+        run: |
+          if [[ -f pnpm-lock.yaml ]]; then
+            echo "missing=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "missing=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-node@v4
+        if: steps.lockfile.outputs.missing == 'true'
         with:
           node-version: 22
       - name: Enable Corepack
+        if: steps.lockfile.outputs.missing == 'true'
         run: corepack enable
       - name: Prepare pnpm
+        if: steps.lockfile.outputs.missing == 'true'
         run: corepack prepare pnpm@9.15.4 --activate
       - name: Generate lockfile only
+        if: steps.lockfile.outputs.missing == 'true'
         run: pnpm install --lockfile-only
       - name: Commit generated lockfile
+        if: steps.lockfile.outputs.missing == 'true'
         run: |
           test -f pnpm-lock.yaml
           git config user.name "github-actions[bot]"
