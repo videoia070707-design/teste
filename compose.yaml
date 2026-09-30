@@ -1,4 +1,19 @@
 services:
+  migrate:
+    profiles: ["ops"]
+    build:
+      context: .
+      args:
+        SERVICE: "@automation/storage-postgres"
+    env_file:
+      - .env
+    command:
+      - pnpm
+      - --filter
+      - "@automation/storage-postgres"
+      - migrate
+    restart: "no"
+
   web:
     build:
       context: .
