@@ -1,30 +1,34 @@
+import { requireWorkspaceContext } from "@/lib/server/auth";
+
 const metrics = [
-  ["Connected channels", "0", "Ready for G3/G4 provider onboarding"],
-  ["Canonical events", "0", "Event pipeline initialized"],
-  ["Unknown sends", "0", "Automatic retry blocked until reconciliation"],
-  ["Reliability health", "Ready", "G2 core active"]
+  ["Connected channels", "0", "G3/G4 onboarding pending credentials"],
+  ["Canonical events", "0", "Durable event pipeline initialized"],
+  ["Unknown sends", "0", "Blind retry blocked until reconciliation"],
+  ["Reliability health", "PASS", "G2 typecheck + tests + build green"]
 ] as const;
 
 const milestones = [
   ["G0", "Product/API Readiness", "DONE"],
-  ["G1", "Core SaaS foundation", "DONE"],
-  ["G2", "Provider + Reliability Core", "IN REVIEW"],
-  ["G3", "Instagram Official", "NEXT"]
+  ["G1", "Core SaaS + verified auth", "DONE"],
+  ["G2", "Provider + Reliability Core", "PASS"],
+  ["G3", "Instagram Official", "IN PROGRESS"]
 ] as const;
 
-export default function OverviewPage() {
+export default async function OverviewPage() {
+  const { membership } = await requireWorkspaceContext();
+
   return (
     <>
       <header className="page-header">
         <div className="header-copy">
-          <div className="eyebrow">Control plane / G0–G2</div>
+          <div className="eyebrow">{membership.workspaceName} / {membership.role}</div>
           <h1>Automação que mostra o que realmente aconteceu.</h1>
           <p>
-            Base independente para Instagram e WhatsApp, com providers desacoplados,
-            health por capability e reliability antes de expansão funcional.
+            Base independente para Instagram e WhatsApp, com sessão verificada,
+            providers desacoplados, health por capability e reliability antes de expansão funcional.
           </p>
         </div>
-        <span className="badge accent"><span className="status-dot healthy" /> Official core ready</span>
+        <span className="badge accent"><span className="status-dot healthy" /> Official core verified</span>
       </header>
 
       <section className="grid metrics">
@@ -48,7 +52,7 @@ export default function OverviewPage() {
             <div className="table-row" key={gate}>
               <strong className="mono">{gate}</strong>
               <span>{scope}</span>
-              <span className={status === "DONE" ? "good" : status === "NEXT" ? "warn" : "muted"}>{status}</span>
+              <span className={status === "DONE" || status === "PASS" ? "good" : "warn"}>{status}</span>
               <span className="muted">HOST PASS required</span>
             </div>
           ))}
@@ -64,8 +68,9 @@ export default function OverviewPage() {
             futuros Browser Lab implementam o mesmo contrato e anunciam capabilities próprias.
           </p>
           <div className="capabilities">
+            <span className="capability on">Verified Auth</span>
+            <span className="capability on">Workspace RBAC</span>
             <span className="capability on">Provider Contract</span>
-            <span className="capability on">Capability Registry</span>
             <span className="capability on">Health State Machine</span>
             <span className="capability beta">Browser Lab isolated</span>
           </div>
