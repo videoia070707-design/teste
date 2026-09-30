@@ -8,6 +8,13 @@ export interface InstagramLongLivedToken {
   expiresInSeconds?: number;
 }
 
+export interface InstagramSelfProfile {
+  appScopedId: string;
+  userId: string;
+  username?: string;
+  accountType?: string;
+}
+
 export function parseInstagramAuthorizationToken(payload: unknown): InstagramAuthorizationToken {
   const candidates = extractTokenCandidates(payload);
 
@@ -60,6 +67,55 @@ export async function exchangeInstagramLongLivedToken(input: {
   };
 }
 
+export async function fetchInstagramSelfProfile(input: {
+  graphBaseUrl: string;
+  apiVersion: string;
+  accessToken: string;
+  fetchImpl?: typeof fetch;
+}): Promise<InstagramSelfProfile> {
+  if (!input.graphBaseUrl || !input.apiVersion || !input.accessToken) {
+    throw new Error("Instagram self-profile lookup is not configured.");
+  }
+
+  const url = new URL(
+    `${encodeURIComponent(input.apiVersion)}/me`,
+    ensureTrailingSlash(input.graphBaseUrl)
+  );
+  url.searchParams.set("fields", "id,user_id,username,account_type");
+
+  const response = await (input.fetchImpl ?? fetch)(url, {
+    method: "GET",
+    headers: {
+      authorization: `Bearer ${input.accessToken}`,
+      accept: "application/json"
+    },
+    cache: "no-store"
+  });
+
+  const payload = await readJsonSafely(response);
+  if (!response.ok || !isRecord(payload)) {
+    throw new Error(`Instagram self-profile lookup failed with HTTP ${response.status}.`);
+  }
+
+  const appScopedId = parseId(payload.id);
+  const userId = parseId(payload.user_id);
+  if (!appScopedId || !userId) {
+    throw new Error("Instagram self-profile response must include both id and user_id.");
+  }
+
+  const username = typeof payload.username === "string" && payload.username ? payload.username : undefined;
+  const accountType = typeof payload.account_type === "string" && payload.account_type
+    ? payload.account_type
+    : undefined;
+
+  return {
+    appScopedId,
+    userId,
+    ...(username ? { username } : {}),
+    ...(accountType ? { accountType } : {})
+  };
+}
+
 function extractTokenCandidates(payload: unknown): InstagramAuthorizationToken[] {
   if (!isRecord(payload)) return [];
 
@@ -79,15 +135,16 @@ function parseCandidate(value: unknown): InstagramAuthorizationToken | null {
   if (!isRecord(value)) return null;
 
   const accessToken = typeof value.access_token === "string" ? value.access_token : "";
-  const userIdValue = value.user_id;
-  const userId = typeof userIdValue === "string"
-    ? userIdValue
-    : typeof userIdValue === "number"
-      ? String(userIdValue)
-      : "";
+  const userId = parseId(value.user_id);
 
   if (!accessToken || !userId) return null;
   return { accessToken, userId };
+}
+
+function parseId(value: unknown): string {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return String(value);
+  return "";
 }
 
 async function readJsonSafely(response: Response): Promise<unknown> {
@@ -96,6 +153,10 @@ async function readJsonSafely(response: Response): Promise<unknown> {
   } catch {
     return null;
   }
+}
+
+function ensureTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value : `${value}/`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
