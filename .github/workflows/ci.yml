@@ -73,6 +73,7 @@ jobs:
           declare
             workspace_id uuid;
             connection_id uuid;
+            actor_user_id uuid := gen_random_uuid();
           begin
             if has_schema_privilege('anon', 'app_private', 'USAGE') then
               raise exception 'anon must not have USAGE on app_private';
@@ -81,9 +82,57 @@ jobs:
               raise exception 'authenticated must not have USAGE on app_private';
             end if;
 
+            insert into auth.users (id, email)
+            values (actor_user_id, 'ci-actor@example.test');
+
             insert into app_private.workspaces (name)
             values ('CI invariant workspace')
             returning id into workspace_id;
+
+            begin
+              insert into app_private.oauth_sessions (
+                workspace_id,
+                provider,
+                state_hash,
+                expires_at
+              ) values (
+                workspace_id,
+                'instagram.meta.official',
+                repeat('a', 64),
+                now() + interval '10 minutes'
+              );
+              raise exception 'OAuth session without initiating actor was accepted';
+            exception
+              when not_null_violation then null;
+            end;
+
+            insert into app_private.oauth_sessions (
+              workspace_id,
+              initiated_by_user_id,
+              provider,
+              state_hash,
+              expires_at
+            ) values (
+              workspace_id,
+              actor_user_id,
+              'instagram.meta.official',
+              repeat('b', 64),
+              now() + interval '10 minutes'
+            );
+
+            insert into app_private.provider_readiness_attestations (
+              workspace_id,
+              provider_key,
+              check_key,
+              status,
+              confirmed_by_user_id
+            ) values (
+              workspace_id,
+              'instagram.meta.official',
+              'ci-readiness-check',
+              'confirmed',
+              actor_user_id
+            );
 
             insert into app_private.channel_connections (
               workspace_id,
