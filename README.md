@@ -16,7 +16,7 @@ Plataforma SaaS de automação para Instagram e WhatsApp.
 
 ## Fase atual
 
-G0–G2 estão concluídos no core. G3 — Instagram Official — está **code-ready** e em preparação/validação de host real.
+G0–G2 estão concluídos no core. G3 — Instagram Official — está **DEPLOYMENT-READY** e aguarda apenas validação de host real contra Supabase/Auth + Meta.
 
 Há três estados deliberadamente diferentes:
 
@@ -103,6 +103,6 @@ As imagens de release incluem SBOM/provenance e são portáveis para qualquer ho
 
 ## Próximos gates
 
-- G3: obter **deployment-ready verde no HEAD** e fechar HOST PASS com uma conta Instagram profissional/App Meta reais
+- G3: fechar HOST PASS com um projeto Supabase/Auth, uma conta Instagram profissional e um App Meta reais
 - G4: WhatsApp Official — somente depois do G3 HOST PASS
 - G5: Unified Inbox + Contacts
