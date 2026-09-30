@@ -8,7 +8,7 @@ import { PostgresConnectionStore } from "@automation/storage-postgres/connection
 import { PostgresOAuthSessionStore } from "@automation/storage-postgres/oauth";
 import type { StoredSecretReference } from "@automation/storage-postgres/secrets";
 import { NextResponse } from "next/server";
-import { requireWorkspaceContext } from "@/lib/server/auth";
+import { requireAuthenticatedUser, requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
 import { getInstagramServerConfig } from "@/lib/server/instagram";
 import { getProviderSecretVault } from "@/lib/server/secrets";
@@ -27,9 +27,16 @@ export async function GET(request: Request): Promise<Response> {
 
   if (!state) return redirectToConnections("invalid_state");
 
+  let userId: string;
+  try {
+    ({ userId } = await requireAuthenticatedUser());
+  } catch {
+    return redirectToConnections("authentication_required");
+  }
+
   const database = getDatabase();
   const oauthSessions = new PostgresOAuthSessionStore(database);
-  const oauthSession = await oauthSessions.consume(PROVIDER_KEY, state);
+  const oauthSession = await oauthSessions.consume(PROVIDER_KEY, state, userId);
 
   if (!oauthSession) return redirectToConnections("invalid_or_expired_state");
 
@@ -38,6 +45,10 @@ export async function GET(request: Request): Promise<Response> {
     ({ membership } = await requireWorkspaceContext(oauthSession.workspaceId));
   } catch {
     return redirectToConnections("workspace_access_denied");
+  }
+
+  if (oauthSession.initiatedByUserId !== userId) {
+    return redirectToConnections("oauth_actor_mismatch");
   }
 
   if (!can(membership.role as WorkspaceRole, "connections.manage")) {
