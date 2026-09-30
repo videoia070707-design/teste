@@ -1,0 +1,60 @@
+name: Free Runtime Adapter
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'database/**'
+      - 'supabase/**'
+      - '.github/workflows/free-runtime.yml'
+  pull_request:
+    paths:
+      - 'database/**'
+      - 'supabase/**'
+      - '.github/workflows/free-runtime.yml'
+
+jobs:
+  validate-boundaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate portable migration stream
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t core < <(find database -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
+          test "${#core[@]}" -eq 12
+          test "${core[0]}" = '001_core.sql'
+          test "${core[11]}" = '012_foreign_key_indexes.sql'
+
+          if grep -RniE '\b(pgmq|pg_cron|pg_net)\b|vault\.' database; then
+            echo 'Supabase-specific dependency leaked into portable database migrations.' >&2
+            exit 1
+          fi
+
+      - name: Validate Supabase adapter migration stream
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=(
+            013_supabase_free_runtime.sql
+            014_provider_keyring_vault.sql
+            015_provider_runtime_config.sql
+            016_generic_runtime_heartbeats.sql
+            017_supabase_runtime_invocation.sql
+            018_supabase_runtime_security_hardening.sql
+            019_edge_runtime_heartbeat_identity.sql
+          )
+          mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
+          test "${#actual[@]}" -eq "${#expected[@]}"
+          for i in "${!expected[@]}"; do
+            test "${actual[$i]}" = "${expected[$i]}"
+          done
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.1.4
+
+      - name: Typecheck Supabase Edge runtime
+        run: deno check supabase/functions/g3-runtime/index.ts
