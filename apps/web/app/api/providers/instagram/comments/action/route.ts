@@ -15,7 +15,7 @@ const MESSAGE_TYPES: Record<CommentAction, string> = {
 };
 
 export async function POST(request: Request): Promise<Response> {
-  const { membership } = await requireWorkspaceContext();
+  const { userId, membership } = await requireWorkspaceContext();
   if (!can(membership.role as WorkspaceRole, "conversation.reply")) {
     return Response.json({ error: "forbidden" }, { status: 403 });
   }
@@ -56,8 +56,6 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "connection_auth_invalid", healthState: connection.health_state }, { status: 409 });
   }
 
-  // The comment must have been observed through our verified webhook pipeline.
-  // This prevents this endpoint from becoming a generic arbitrary-comment relay.
   const [observed] = await database<{ id: string }[]>`
     select id
     from app_private.canonical_events
@@ -100,6 +98,28 @@ export async function POST(request: Request): Promise<Response> {
       },
       { status: 409 }
     );
+  }
+
+  if (creation.created) {
+    await database`
+      insert into app_private.audit_logs (
+        workspace_id,
+        actor_user_id,
+        action,
+        resource_type,
+        resource_id,
+        correlation_id,
+        metadata
+      ) values (
+        ${membership.workspaceId},
+        ${userId},
+        ${input.action === "PRIVATE_REPLY" ? "instagram.comment.private_reply.queued" : "instagram.comment.public_reply.queued"},
+        'message',
+        ${creation.message.id},
+        ${creation.message.correlationId},
+        ${database.json({ provider: "instagram.meta.official", mode: "official", action: input.action })}
+      )
+    `;
   }
 
   return Response.json(
