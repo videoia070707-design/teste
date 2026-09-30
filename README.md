@@ -11,15 +11,17 @@ Plataforma SaaS de automação para Instagram e WhatsApp.
 - Multi-tenant desde o núcleo
 - Reliability antes de expansão funcional
 - Gate PASS somente por evidência operacional
+- Least privilege por capability implementada
 
 ## Fase atual
 
-G0–G2 estão concluídos no core. G3 — Instagram Official — está em integração/validação de host real.
+G0–G2 estão concluídos no core. G3 — Instagram Official — está code-ready e em validação de host real.
 
 O código atual já possui:
 
 - sessão Supabase SSR, workspace e RBAC no servidor;
-- OAuth/Instagram Login com `state` persistido e consumível uma única vez;
+- OAuth/Instagram Login com `state` persistido, hash-only, consumível uma única vez e vinculado ao usuário que iniciou o fluxo;
+- revalidação de membership/permissão no callback OAuth;
 - credenciais do provider criptografadas e referenciadas fora da UI;
 - webhook com validação de assinatura e persistência antes do ACK;
 - worker de ingress com lease, retry, deduplicação e collision guard;
@@ -28,15 +30,27 @@ O código atual já possui:
 - DM, resposta pública a comentário e private reply/comment→DM pelo provider oficial;
 - claim único de private reply por comentário;
 - health center, capability evidence e reconciliação manual auditável;
+- Meta Readiness Center separando configuração, attestations externas e live evidence;
+- páginas públicas de Privacy Policy e Data Deletion que só ficam disponíveis quando identidade legal e contato estão configurados;
 - dashboard de Reliability e Overview ligados ao banco real;
 - G3 calculado por evidência: OAuth válido + webhook real `message.received` + DM outbound aceita com provider message ID;
-- CI com PostgreSQL real para migrations, typecheck, testes e build.
+- CI com PostgreSQL real para migrations, invariantes, typecheck, testes e build.
 
-G3 **não deve ser marcado PASS apenas porque o código compila**. O status só muda quando as três evidências de host real forem persistidas no workspace.
+### Instagram scopes do G3
+
+O OAuth atual solicita apenas as permissões usadas pelas capacidades implementadas:
+
+- `instagram_business_basic`
+- `instagram_business_manage_messages`
+- `instagram_business_manage_comments`
+
+`instagram_business_content_publish` fica separado como escopo opcional futuro. `content.publish` permanece indisponível até a função existir e ter seus próprios testes. Isso evita pedir permissão antecipadamente apenas porque a API a oferece.
+
+G3 **não deve ser marcado PASS apenas porque o código compila ou porque um checklist foi confirmado**. O status só muda quando as evidências de host real forem persistidas no workspace.
 
 ## Estrutura
 
-- `apps/web`: dashboard web, auth, OAuth/callbacks e APIs protegidas
+- `apps/web`: dashboard web, auth, OAuth/callbacks, Readiness Center e APIs protegidas
 - `apps/worker-ingress`: processamento durável de webhooks
 - `apps/worker-outbound`: envio durável e recuperação segura de side effects
 - `packages/core`: tipos, RBAC e regras de domínio compartilhadas
@@ -51,5 +65,5 @@ G3 **não deve ser marcado PASS apenas porque o código compila**. O status só 
 ## Próximos gates
 
 - G3: fechar HOST PASS com uma conta Instagram profissional/App Meta reais
-- G4: WhatsApp Official
+- G4: WhatsApp Official — somente depois do G3 HOST PASS
 - G5: Unified Inbox + Contacts
