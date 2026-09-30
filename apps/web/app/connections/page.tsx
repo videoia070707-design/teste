@@ -1,80 +1,119 @@
-const connections = [
-  {
-    name: "Instagram Official",
-    mark: "IG",
-    mode: "Official",
-    status: "DISCONNECTED",
-    statusClass: "muted",
-    description: "Instagram Login / Meta API para contas profissionais.",
-    capabilities: ["messages", "comments", "stories", "publishing"],
-    lastEvent: "—",
-    auth: "Not connected",
-    webhook: "Not subscribed"
-  },
-  {
-    name: "WhatsApp Cloud",
-    mark: "WA",
-    mode: "Official",
-    status: "DISCONNECTED",
-    statusClass: "muted",
-    description: "WhatsApp Business Platform via Embedded Signup.",
-    capabilities: ["messages", "media", "templates", "flows"],
-    lastEvent: "—",
-    auth: "Not connected",
-    webhook: "Not subscribed"
-  },
-  {
-    name: "Browser Session",
-    mark: "LAB",
-    mode: "Browser Lab",
-    status: "LOCKED",
-    statusClass: "warn",
-    description: "Provider experimental isolado. Nunca utilizado como failover silencioso.",
-    capabilities: ["session health", "driver versioning", "canary tests"],
-    lastEvent: "Disabled until G12",
-    auth: "Isolated",
-    webhook: "N/A"
-  }
-] as const;
+import { PostgresConnectionStore, type StoredConnectionRecord } from "@automation/storage-postgres/connections";
+import { requireWorkspaceContext } from "@/lib/server/auth";
+import { getDatabase } from "@/lib/server/database";
 
-export default function ConnectionsPage() {
+export const dynamic = "force-dynamic";
+
+export default async function ConnectionsPage() {
+  const { membership } = await requireWorkspaceContext();
+  const store = new PostgresConnectionStore(getDatabase());
+  const persisted = await store.listWorkspaceConnections(membership.workspaceId);
+  const instagram = persisted.find((item) => item.providerKey === "instagram.meta.official") ?? null;
+  const activeCount = persisted.filter((item) => item.authValid).length;
+
   return (
     <>
       <header className="page-header">
         <div className="header-copy">
-          <div className="eyebrow">Connections</div>
+          <div className="eyebrow">Connections / {membership.workspaceName}</div>
           <h1>Connection Health Center</h1>
           <p>Uma conexão só é saudável quando autenticação, provider, webhook e capabilities concordam.</p>
         </div>
-        <span className="badge">0 active connections</span>
+        <span className="badge">{activeCount} authenticated connection{activeCount === 1 ? "" : "s"}</span>
       </header>
 
       <div className="notice warning">
-        O produto não usa um booleano “connected”. Falhas parciais devem aparecer como DEGRADED_PARTIAL, sem mascarar capabilities quebradas.
+        O produto não usa um booleano “connected”. Credencial válida sem evidência de webhook permanece STALE; capabilities quebradas devem aparecer como DEGRADED_PARTIAL.
       </div>
 
       <section className="section grid two">
-        {connections.map((connection) => (
-          <article className="card connection-card" key={connection.name}>
-            <div className="connection-head">
-              <div className="connection-title">
-                <div className="channel-mark">{connection.mark}</div>
-                <div><h2>{connection.name}</h2><p>{connection.mode}</p></div>
-              </div>
-              <span className={`badge ${connection.statusClass}`}>{connection.status}</span>
+        <article className="card connection-card">
+          <div className="connection-head">
+            <div className="connection-title">
+              <div className="channel-mark">IG</div>
+              <div><h2>Instagram Official</h2><p>Official</p></div>
             </div>
-            <p>{connection.description}</p>
-            <div className="capabilities">
-              {connection.capabilities.map((capability) => <span className="capability on" key={capability}>{capability}</span>)}
+            <span className={`badge ${healthClass(instagram?.healthState ?? "DISCONNECTED")}`}>
+              {instagram?.healthState ?? "DISCONNECTED"}
+            </span>
+          </div>
+          <p>Instagram Login / Meta API para contas profissionais Business ou Creator.</p>
+          <div className="capabilities">
+            <span className="capability on">messages</span>
+            <span className="capability on">comments</span>
+            <span className="capability on">stories</span>
+            <span className="capability on">publishing</span>
+          </div>
+          <div>
+            <div className="key-value"><span>Authentication</span><strong>{instagram ? authLabel(instagram) : "Not connected"}</strong></div>
+            <div className="key-value"><span>Webhook</span><strong>{webhookLabel(instagram)}</strong></div>
+            <div className="key-value"><span>Instagram account</span><strong className="mono">{instagram?.displayName ?? instagram?.externalAccountId ?? "—"}</strong></div>
+          </div>
+          <div className="connection-actions">
+            <a className="button primary" href="/api/connections/instagram/start">
+              {instagram ? "Reautorizar Instagram" : "Conectar Instagram"}
+            </a>
+          </div>
+        </article>
+
+        <article className="card connection-card">
+          <div className="connection-head">
+            <div className="connection-title">
+              <div className="channel-mark">WA</div>
+              <div><h2>WhatsApp Cloud</h2><p>Official</p></div>
             </div>
-            <div>
-              <div className="key-value"><span>Authentication</span><strong>{connection.auth}</strong></div>
-              <div className="key-value"><span>Webhook</span><strong>{connection.webhook}</strong></div>
-              <div className="key-value"><span>Last event</span><strong>{connection.lastEvent}</strong></div>
+            <span className="badge muted">G4</span>
+          </div>
+          <p>WhatsApp Business Platform via Embedded Signup, com Coexistence quando elegível.</p>
+          <div className="capabilities">
+            <span className="capability on">messages</span>
+            <span className="capability on">media</span>
+            <span className="capability on">templates</span>
+            <span className="capability on">flows</span>
+          </div>
+          <div>
+            <div className="key-value"><span>Authentication</span><strong>Not implemented yet</strong></div>
+            <div className="key-value"><span>Webhook</span><strong>G4</strong></div>
+            <div className="key-value"><span>Phone</span><strong>—</strong></div>
+          </div>
+          <div className="connection-actions">
+            <button className="button" type="button" disabled>Disponível no G4</button>
+          </div>
+        </article>
+
+        <article className="card connection-card">
+          <div className="connection-head">
+            <div className="connection-title">
+              <div className="channel-mark">LAB</div>
+              <div><h2>Browser Session</h2><p>Browser Lab</p></div>
             </div>
-          </article>
-        ))}
+            <span className="badge warn">LOCKED</span>
+          </div>
+          <p>Provider experimental isolado. Nunca utilizado como failover silencioso do provider oficial.</p>
+          <div className="capabilities">
+            <span className="capability beta">session health</span>
+            <span className="capability beta">driver versioning</span>
+            <span className="capability beta">canary tests</span>
+          </div>
+          <div className="key-value"><span>Availability</span><strong>G12–G13</strong></div>
+        </article>
       </section>
     </>
   );
+}
+
+function authLabel(connection: StoredConnectionRecord): string {
+  return connection.authValid ? "Verified credential attached" : "Credential invalid / missing";
+}
+
+function webhookLabel(connection: StoredConnectionRecord | null): string {
+  if (!connection) return "Not subscribed";
+  if (connection.webhookHealthy === null) return "Unknown / awaiting evidence";
+  return connection.webhookHealthy ? "Verified healthy" : "Verified unhealthy";
+}
+
+function healthClass(state: StoredConnectionRecord["healthState"]): string {
+  if (state === "HEALTHY") return "good";
+  if (state === "STALE" || state === "DEGRADED_PARTIAL") return "warn";
+  return "muted";
 }
