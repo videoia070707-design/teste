@@ -1,4 +1,5 @@
 import "server-only";
+import { INSTAGRAM_LOGIN_SCOPES } from "@automation/provider-instagram-official";
 import type { DatabaseClient } from "@automation/storage-postgres";
 
 const PROVIDER_KEY = "instagram.meta.official";
@@ -27,12 +28,6 @@ export interface InstagramReadinessReport {
   external: Array<ReadinessCheck & { attestationStatus: string | null; note: string | null }>;
   liveEvidence: ReadinessCheck[];
 }
-
-const REQUIRED_PERMISSIONS = [
-  "instagram_business_basic",
-  "instagram_business_manage_messages",
-  "instagram_business_manage_comments"
-] as const;
 
 const EXTERNAL_CHECKS = [
   ["meta_business_app_created", "Meta Business app criado"],
@@ -165,7 +160,7 @@ export async function buildInstagramReadinessReport(
     configurationReady: configuration.every((item) => item.state === "READY"),
     hostPass: live.oauth_ready && live.webhook_message_observed && live.outbound_traced,
     urls,
-    permissions: REQUIRED_PERMISSIONS,
+    permissions: INSTAGRAM_LOGIN_SCOPES,
     configuration,
     external,
     liveEvidence
