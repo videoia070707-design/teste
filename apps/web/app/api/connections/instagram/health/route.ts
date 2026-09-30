@@ -80,9 +80,9 @@ export async function POST(request: Request): Promise<Response> {
     ...(connection.display_name ? { displayName: connection.display_name } : {})
   };
 
-  const provider = getInstagramOfficialProvider();
+  const provider = await getInstagramOfficialProvider();
   const probe = await provider.verifyConnection(providerConnection);
-  const config = getInstagramApiConfig();
+  const config = await getInstagramApiConfig();
   const finalState = combineHealth({
     probeState: probe.state,
     authValid: probe.authValid,
