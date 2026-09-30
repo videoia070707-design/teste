@@ -12,11 +12,11 @@ Plataforma SaaS de automação para Instagram e WhatsApp.
 - Reliability antes de expansão funcional
 - Gate PASS somente por evidência operacional
 - Least privilege por capability implementada
-- Runtime portátil: containers versionados, sem dependência estrutural de Replit/Vercel
+- Runtime portátil: containers versionados, sem dependência estrutural de Replit/Vercel/Render
 
 ## Fase atual
 
-G0–G2 estão concluídos no core. G3 — Instagram Official — está **DEPLOYMENT-READY** e aguarda apenas validação de host real contra Supabase/Auth + Meta.
+G0–G2 estão concluídos no core. G3 — Instagram Official — está **DEPLOYMENT-READY**. O Supabase real de teste já foi provisionado e validado; o próximo passo é provisionar os serviços do `render.yaml` e então executar o HOST PASS contra a Meta.
 
 Há três estados deliberadamente diferentes:
 
@@ -25,6 +25,30 @@ Há três estados deliberadamente diferentes:
 3. **HOST PASS** — OAuth + webhook + inbound + outbound reais foram provados contra a Meta no mesmo workspace.
 
 Nenhum dos dois primeiros estados promove automaticamente o terceiro.
+
+### Infraestrutura real já provisionada
+
+Supabase de teste do G3:
+
+- project ref: `cqtrigqlktekczbbsxiy`;
+- região: `sa-east-1` (São Paulo);
+- PostgreSQL 17;
+- migrations `001`–`012` aplicadas;
+- `app_private` sem `USAGE` para `anon` e `authenticated`;
+- advisor de segurança sem lints após as migrations;
+- foreign keys críticas com índices de cobertura;
+- publishable key usada apenas como chave pública de Auth/Data API; provider/database secrets continuam fora do Git.
+
+Render:
+
+- `render.yaml` define `automation-web`, `automation-worker-ingress` e `automation-worker-outbound`;
+- web Free é apenas ambiente controlado para HOST PASS, não produção always-on;
+- os dois workers usam o menor plano de background worker disponível;
+- `APP_ORIGIN` deriva de `RENDER_EXTERNAL_URL`;
+- shared secrets são declarados uma vez no web service e copiados para workers via `fromService` quando aplicável;
+- deploy automático usa `checksPass`;
+- migrations rodam no pre-deploy do worker ingress pago; web Free não usa pre-deploy;
+- CI específico do Blueprint impede `preDeployCommand` em plano Free e worker Free.
 
 O código atual já possui:
 
@@ -103,6 +127,6 @@ As imagens de release incluem SBOM/provenance e são portáveis para qualquer ho
 
 ## Próximos gates
 
-- G3: fechar HOST PASS com um projeto Supabase/Auth, uma conta Instagram profissional e um App Meta reais
+- G3: provisionar runtime público e fechar HOST PASS com uma conta Instagram profissional + App Meta reais
 - G4: WhatsApp Official — somente depois do G3 HOST PASS
 - G5: Unified Inbox + Contacts
