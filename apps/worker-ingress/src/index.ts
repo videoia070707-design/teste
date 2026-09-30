@@ -244,7 +244,7 @@ async function persistCanonicalMessage(
         ${event.providerEventId},
         true,
         ${fingerprint},
-        ${tx.json(asJsonObject(ingress.headers))},
+        ${tx.json(asJsonValue(ingress.headers))},
         ${tx.json(asJsonValue(event.raw))},
         ${ingress.firstReceivedAt},
         'VALIDATED'
@@ -269,7 +269,40 @@ async function persistCanonicalMessage(
       if (!existing) throw new Error("RAW_EVENT_CONFLICT_WITHOUT_ROW");
       if (existing.fingerprint !== fingerprint) throw new SuspiciousEventCollisionError();
 
-      await updateWebhookEvidence(tx, connection, event.occurredAt);
+      await tx`
+        insert into app_private.connection_webhook_evidence (
+          connection_id,
+          last_verified_event_at,
+          consecutive_valid_events,
+          consecutive_invalid_events,
+          updated_at
+        ) values (
+          ${connection.id},
+          ${event.occurredAt},
+          1,
+          0,
+          now()
+        )
+        on conflict (connection_id)
+        do update set
+          last_verified_event_at = greatest(
+            coalesce(app_private.connection_webhook_evidence.last_verified_event_at, excluded.last_verified_event_at),
+            excluded.last_verified_event_at
+          ),
+          consecutive_valid_events = app_private.connection_webhook_evidence.consecutive_valid_events + 1,
+          consecutive_invalid_events = 0,
+          updated_at = now()
+      `;
+
+      await tx`
+        update app_private.channel_connections
+        set
+          webhook_healthy = true,
+          last_event_at = greatest(coalesce(last_event_at, ${event.occurredAt}), ${event.occurredAt}),
+          health_state = case when auth_valid then 'HEALTHY' else 'AUTH_EXPIRED' end,
+          updated_at = now()
+        where id = ${connection.id}
+      `;
       return;
     }
 
@@ -308,7 +341,7 @@ async function persistCanonicalMessage(
         ${correlationId},
         ${event.occurredAt},
         ${ingress.firstReceivedAt},
-        ${tx.json(canonicalPayload)}
+        ${tx.json(asJsonValue(canonicalPayload))}
       )
       returning id
     `;
@@ -327,12 +360,12 @@ async function persistCanonicalMessage(
         ${eventType},
         'canonical_event',
         ${canonical.id},
-        ${tx.json({
+        ${tx.json(asJsonValue({
           canonicalEventId: canonical.id,
           eventType,
           connectionId: connection.id,
           correlationId
-        })}
+        }))}
       )
     `;
 
@@ -342,49 +375,41 @@ async function persistCanonicalMessage(
       where id = ${rawEventId}
     `;
 
-    await updateWebhookEvidence(tx, connection, event.occurredAt);
+    await tx`
+      insert into app_private.connection_webhook_evidence (
+        connection_id,
+        last_verified_event_at,
+        consecutive_valid_events,
+        consecutive_invalid_events,
+        updated_at
+      ) values (
+        ${connection.id},
+        ${event.occurredAt},
+        1,
+        0,
+        now()
+      )
+      on conflict (connection_id)
+      do update set
+        last_verified_event_at = greatest(
+          coalesce(app_private.connection_webhook_evidence.last_verified_event_at, excluded.last_verified_event_at),
+          excluded.last_verified_event_at
+        ),
+        consecutive_valid_events = app_private.connection_webhook_evidence.consecutive_valid_events + 1,
+        consecutive_invalid_events = 0,
+        updated_at = now()
+    `;
+
+    await tx`
+      update app_private.channel_connections
+      set
+        webhook_healthy = true,
+        last_event_at = greatest(coalesce(last_event_at, ${event.occurredAt}), ${event.occurredAt}),
+        health_state = case when auth_valid then 'HEALTHY' else 'AUTH_EXPIRED' end,
+        updated_at = now()
+      where id = ${connection.id}
+    `;
   });
-}
-
-async function updateWebhookEvidence(
-  sql: DatabaseClient,
-  connection: ResolvedConnection,
-  occurredAt: string
-): Promise<void> {
-  await sql`
-    insert into app_private.connection_webhook_evidence (
-      connection_id,
-      last_verified_event_at,
-      consecutive_valid_events,
-      consecutive_invalid_events,
-      updated_at
-    ) values (
-      ${connection.id},
-      ${occurredAt},
-      1,
-      0,
-      now()
-    )
-    on conflict (connection_id)
-    do update set
-      last_verified_event_at = greatest(
-        coalesce(app_private.connection_webhook_evidence.last_verified_event_at, excluded.last_verified_event_at),
-        excluded.last_verified_event_at
-      ),
-      consecutive_valid_events = app_private.connection_webhook_evidence.consecutive_valid_events + 1,
-      consecutive_invalid_events = 0,
-      updated_at = now()
-  `;
-
-  await sql`
-    update app_private.channel_connections
-    set
-      webhook_healthy = true,
-      last_event_at = greatest(coalesce(last_event_at, ${occurredAt}), ${occurredAt}),
-      health_state = case when auth_valid then 'HEALTHY' else 'AUTH_EXPIRED' end,
-      updated_at = now()
-    where id = ${connection.id}
-  `;
 }
 
 async function markResolved(sql: DatabaseClient, ingressId: string, note: string | null): Promise<void> {
@@ -453,13 +478,6 @@ function sortJson(value: unknown): unknown {
     sorted[key] = sortJson((value as Record<string, unknown>)[key]);
   }
   return sorted;
-}
-
-function asJsonObject(value: unknown): Record<string, unknown> {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
 }
 
 function asJsonValue(value: unknown): never {
