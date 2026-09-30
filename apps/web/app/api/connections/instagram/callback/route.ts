@@ -2,6 +2,7 @@ import { can, type WorkspaceRole } from "@automation/core";
 import { exchangeInstagramAuthorizationCode } from "@automation/provider-instagram-official";
 import {
   exchangeInstagramLongLivedToken,
+  fetchInstagramSelfProfile,
   parseInstagramAuthorizationToken
 } from "@automation/provider-instagram-official/tokens";
 import { PostgresConnectionStore } from "@automation/storage-postgres/connections";
@@ -74,13 +75,24 @@ export async function GET(request: Request): Promise<Response> {
       clientSecret: config.oauth.clientSecret,
       shortLivedAccessToken: shortLived.accessToken
     });
+    const profile = await fetchInstagramSelfProfile({
+      graphBaseUrl: config.graphBaseUrl,
+      apiVersion: config.apiVersion,
+      accessToken: longLived.accessToken
+    });
+
+    if (shortLived.userId !== profile.userId && shortLived.userId !== profile.appScopedId) {
+      throw new Error("INSTAGRAM_OAUTH_IDENTITY_MISMATCH");
+    }
 
     const connection = await connectionStore.upsertPendingCredentialConnection({
       workspaceId: membership.workspaceId,
       channel: "instagram",
       providerKey: PROVIDER_KEY,
       providerMode: "official",
-      externalAccountId: shortLived.userId
+      externalAccountId: profile.userId,
+      providerSubjectId: profile.appScopedId,
+      ...(profile.username ? { displayName: profile.username } : {})
     });
     connectionId = connection.id;
 
@@ -98,7 +110,7 @@ export async function GET(request: Request): Promise<Response> {
         schemaVersion: 1,
         tokenKind: "long_lived",
         accessToken: longLived.accessToken,
-        igUserId: shortLived.userId,
+        igUserId: profile.userId,
         obtainedAt: obtainedAt.toISOString(),
         expiresAt
       })
