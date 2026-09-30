@@ -21,6 +21,7 @@ A documentação oficial atual descreve Instagram Login para contas profissionai
 Antes de tocar na Meta, o ambiente precisa ter:
 
 - PostgreSQL real acessível pelo web e pelos workers;
+- conexão PostgreSQL criptografada em ambiente público: `sslmode=require` no mínimo; preferir `sslmode=verify-full` quando CA/hostname puderem ser validados;
 - Supabase Auth configurado;
 - domínio HTTPS público em `APP_ORIGIN`;
 - `LEGAL_ENTITY_NAME` e `SUPPORT_EMAIL` configurados;
@@ -40,7 +41,7 @@ Abra:
 
 `/connections/instagram/readiness`
 
-A seção **Runtime configuration** precisa estar pronta. Execute **preflight local**. O resultado `ready` comprova somente estrutura/configuração local; nunca conta como HOST PASS.
+A seção **Runtime configuration** precisa estar pronta. Em ambiente público, `DATABASE_URL TLS` também deve estar `READY`; o Readiness Center bloqueia configuração pública sem `sslmode=require`, `verify-ca` ou `verify-full`. Execute **preflight local**. O resultado `ready` comprova somente estrutura/configuração local; nunca conta como HOST PASS.
 
 ## 1. Configurar o App Meta
 
