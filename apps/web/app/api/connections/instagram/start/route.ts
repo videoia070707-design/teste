@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(): Promise<Response> {
   try {
-    const { membership } = await requireWorkspaceContext();
+    const { userId, membership } = await requireWorkspaceContext();
 
     if (!can(membership.role as WorkspaceRole, "connections.manage")) {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
@@ -24,6 +24,7 @@ export async function GET(): Promise<Response> {
 
     await sessions.create({
       workspaceId: membership.workspaceId,
+      initiatedByUserId: userId,
       provider: "instagram.meta.official",
       state,
       redirectAfter: "/connections",
