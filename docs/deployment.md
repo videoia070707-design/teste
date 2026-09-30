@@ -14,7 +14,8 @@ Componentes:
 - Edge Function `g3-runtime`: executor curto de ingress + outbound;
 - Edge Function `instagram-webhook`: callback público da Meta com challenge + HMAC sobre raw body;
 - Edge Function `instagram-data-deletion`: callback assinado de exclusão de dados + status por confirmation code;
-- Supabase Vault: token interno de runtime, keyring AES-256-GCM, secrets Meta e senha da role web.
+- Supabase Vault: token interno de runtime, keyring AES-256-GCM, secrets Meta e senha da role web;
+- `app_private.provider_runtime_config`: configuração global não secreta dos providers hospedados.
 
 Nenhum background worker pago é necessário para o G3 Free.
 
@@ -38,51 +39,41 @@ O CI aplica **todos** os arquivos `database/[0-9][0-9][0-9]_*.sql` em PostgreSQL
 Arquivos específicos do Supabase:
 
 - `supabase/migrations/013–020` — runtime Free, Vault, pg_net/pg_cron, heartbeat e role web least-privilege;
-- `supabase/migrations/021_meta_compliance.sql` — espelho idempotente da migration portátil 021 para manter o projeto hospedado alinhado ao mesmo schema de produto;
-- `supabase/migrations/022_meta_webhook_verify_token.sql` — gera um verify token aleatório diretamente no Vault, sem secret manager pago ou placeholder no repositório.
+- `supabase/migrations/021_meta_compliance.sql` — espelho idempotente da migration portátil 021;
+- `supabase/migrations/022_meta_webhook_verify_token.sql` — gera o verify token do webhook diretamente no Vault;
+- `supabase/migrations/023_instagram_platform_config.sql` — centraliza App ID, endpoints OAuth, Graph config e identity probe do Instagram em configuração global server-only.
 
-O adapter 013–020 contém:
+A migration 023 **não semeia endpoints OAuth por suposição**. App ID, authorize URL, token URL, long-lived token URL e identity probe permanecem nulos até serem confirmados contra o App Meta real. `graph_base_url` e `graph_api_version` continuam pinados no banco e o encoding OAuth fica explicitamente controlado.
 
-- PGMQ queues e triggers;
-- token interno no Vault;
-- keyring AES no Vault;
-- provider runtime config server-only;
-- heartbeat genérico para Edge/Cron;
-- `pg_net` wake-up;
-- Cron de recovery;
-- hardening de `search_path`/`pg_net`;
-- identidade estável do heartbeat Edge;
-- role PostgreSQL `automation_web` least-privilege e bridge allowlisted para secrets do Vault.
+O projeto Supabase real usa o histórico nativo de migrations. O ledger `app_private.schema_migrations` é exclusivo do runner portátil e **não deve ser criado/adotado no banco Supabase atual sem procedimento explícito de reconciliação**.
 
-O projeto Supabase real usa o histórico nativo de migrations. O ledger `app_private.schema_migrations` é exclusivo do runner portátil e **não deve ser criado/adotado no banco Supabase atual sem um procedimento explícito de reconciliação**.
-
-Durante a fase de validação, a migration idempotente `meta_compliance` foi registrada três vezes no histórico nativo do projeto hospedado. Os objetos resultantes são únicos/idempotentes e os Advisors permanecem limpos. Não remover nem editar entradas antigas do histórico. Futuras alterações de compliance recebem um novo número/nome de migration; `meta_compliance` não deve ser reutilizada novamente.
+Durante a fase de validação, a migration idempotente `meta_compliance` foi registrada três vezes no histórico nativo do projeto hospedado. Os objetos resultantes são únicos/idempotentes e os Advisors permanecem limpos. Não remover nem editar entradas antigas do histórico. Futuras alterações recebem novo número/nome de migration.
 
 ## Modelo de execução
 
-Quando um webhook é persistido:
+Webhook:
 
-1. a Meta chama `instagram-webhook` no Supabase Edge;
-2. GET de verificação usa somente o verify token do Vault; POST exige o App Secret e valida HMAC SHA-256 sobre o raw body;
-3. `webhook_ingress_events` recebe o envelope antes do ACK do provider;
-4. trigger envia um sinal para `instagram_ingress` (PGMQ);
-5. trigger faz wake-up assíncrono do `g3-runtime` via `pg_net`;
-6. Edge Function faz claim usando o estado/lease da tabela autoritativa;
-7. normaliza e persiste `raw_events`, `canonical_events` e outbox;
-8. sinal de fila é removido depois do processamento;
-9. se o wake-up falhar, o Cron recupera linhas prontas diretamente do banco.
+1. Meta chama `instagram-webhook` no Supabase Edge;
+2. GET usa somente o verify token do Vault; POST exige App Secret e valida HMAC SHA-256 sobre raw body;
+3. `webhook_ingress_events` persiste o envelope antes do ACK;
+4. trigger sinaliza `instagram_ingress` no PGMQ;
+5. `pg_net` acorda o `g3-runtime`;
+6. Edge faz claim com lease/idempotência;
+7. normaliza para `raw_events`, `canonical_events` e outbox;
+8. o sinal da fila é removido após processamento;
+9. Cron recupera trabalho pronto se o wake-up falhar.
 
-Outbound usa a mesma ideia:
+Outbound:
 
-1. API cria `messages` em `QUEUED` com idempotency/resource claim;
+1. API cria `messages` em `QUEUED`;
 2. trigger sinaliza `instagram_outbound`;
-3. Edge Function faz claim e muda para `PROCESSING`;
+3. Edge faz claim e muda para `PROCESSING`;
 4. chama a Meta;
 5. outcome definitivo vira `SENT`, `FAILED` ou `RETRYING`;
-6. timeout/5xx/transport ambíguo vira `SEND_RESULT_UNKNOWN`;
-7. falha de persistência depois do dispatch preserva a lease; expiração posterior também vira `SEND_RESULT_UNKNOWN`.
+6. timeout/5xx/transporte ambíguo após dispatch vira `SEND_RESULT_UNKNOWN`;
+7. falha de persistência após dispatch preserva a ambiguidade e nunca autoriza blind retry.
 
-A PGMQ é um acelerador de entrega, não a única fonte de verdade. Isso permite recovery mesmo se o sinal da fila se perder.
+PGMQ é acelerador de entrega, não fonte única de verdade.
 
 ## Data deletion da Meta
 
@@ -90,175 +81,132 @@ O callback hospedado é `instagram-data-deletion` e recebe `signed_request` da M
 
 Fluxo:
 
-1. POST recebe somente `application/x-www-form-urlencoded` ou `multipart/form-data`;
-2. `signed_request` é validado com HMAC-SHA256 e `meta_app_secret` do Vault;
-3. a identidade app-scoped (`user_id`) nunca é gravada em plaintext no receipt;
-4. `request_fingerprint` e `provider_subject_hash` usam SHA-256;
-5. o receipt recebe `confirmation_code` aleatório e processamento transacional;
-6. `delete_provider_subject_data()` remove somente conexões ligadas ao `provider_subject_id` exato;
-7. dados legados sem identidade resolvível convergem para `MANUAL_REVIEW` em vez de apagar por aproximação;
-8. GET com `code` retorna somente status público do receipt.
+1. POST aceita somente form data compatível;
+2. `signed_request` é validado por HMAC-SHA256 com `meta_app_secret` do Vault;
+3. o provider subject não é retido em plaintext no receipt;
+4. fingerprint e subject hash usam SHA-256;
+5. o receipt recebe `confirmation_code` aleatório;
+6. `delete_provider_subject_data()` apaga somente `provider_subject_id` exato;
+7. identidade não resolvida vai para `MANUAL_REVIEW`, nunca fuzzy delete;
+8. GET com `code` expõe apenas status público.
 
-A função Edge usa `verify_jwt=false` porque a Meta não possui sessão Supabase; a autenticação é o próprio `signed_request`. Sem `meta_app_secret`, o POST responde 503/fail-closed.
+Sem `meta_app_secret`, o POST responde 503/fail-closed. O workflow `Meta Compliance` prova isolamento da exclusão e bloqueio para roles públicas.
 
-O workflow `Meta Compliance` prova em PostgreSQL limpo que o subject exato remove somente seus dados, que um subject inexistente produz zero side effect, que conexões não relacionadas sobrevivem e que `anon`/`authenticated` não executam a função de exclusão.
+## Segredos e configuração de provider
 
-## Cron e orçamento do Free tier
+### Supabase Vault
 
-O job `g3-runtime-recovery` roda a cada 15 segundos. O wake-up imediato acontece apenas quando há trabalho novo.
-
-O desenho evita processos 24/7 e permanece dentro do objetivo de desenvolvimento/HOST PASS no plano gratuito. Frequência, batch size e estratégia serão reavaliados com métricas reais antes de beta público.
-
-## Segredos
-
-### Supabase Vault — padrão
-
-- `g3_runtime_cron_token`: token aleatório entre Postgres/pg_net e a Edge Function;
-- `provider_secret_keyring`: JSON do keyring AES-256-GCM usado nas credenciais de providers;
-- `automation_web_db_password`: senha da role PostgreSQL dedicada ao dashboard;
-- `meta_webhook_verify_token`: verify token aleatório gerado dentro do próprio projeto pela migration 022;
-- `meta_app_secret`: App Secret real da Meta, compartilhado pelo OAuth web, webhook HMAC e data deletion signed request;
-- `meta_webhook_signature_header`: opcional; default funcional é `x-hub-signature-256`.
-
-O runtime token plaintext não fica em tabelas de produto. `app_private.runtime_invocation_tokens` guarda somente SHA-256 para validação.
-
-O web **não recebe acesso direto ao schema `vault`**. A role `automation_web` pode executar apenas `app_private.get_platform_secret(text)`, uma função `SECURITY DEFINER` em schema privado, com `search_path` fixo, `PUBLIC EXECUTE` revogado e allowlist explícita.
-
-### Estado atual dos secrets hospedados
-
-Já provisionados no Vault:
-
+- `g3_runtime_cron_token`;
 - `provider_secret_keyring`;
 - `automation_web_db_password`;
-- `meta_webhook_verify_token`.
+- `meta_webhook_verify_token`;
+- `meta_app_secret` — **ainda externo/obrigatório antes do HOST PASS**;
+- `meta_webhook_signature_header` — opcional, default `x-hub-signature-256`.
 
-Ainda externo/obrigatório antes do HOST PASS:
+Já provisionados no Vault: `provider_secret_keyring`, `automation_web_db_password` e `meta_webhook_verify_token`.
 
-- `meta_app_secret` real do App Meta.
+Nunca criar placeholder para `meta_app_secret`.
 
-Nunca criar placeholder para `meta_app_secret`; POST do webhook e data deletion devem permanecer fail-closed até o segredo real ser configurado.
+### `provider_runtime_config`
 
-### Variáveis externas ainda necessárias no web
+No caminho hospedado, a configuração Meta/Instagram não secreta não pertence ao Render. A linha `instagram.meta.official` concentra:
 
-- `APP_ORIGIN`
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
-- `DATABASE_URL` usando a role `automation_web`
-- `DATABASE_POOL_MAX` (3 no Blueprint Free atual)
-- `META_APP_ID`
-- `INSTAGRAM_GRAPH_BASE_URL`
-- `INSTAGRAM_GRAPH_API_VERSION`
-- `INSTAGRAM_IDENTITY_PROBE_PATH`
-- `INSTAGRAM_OAUTH_AUTHORIZE_URL`
-- `INSTAGRAM_OAUTH_TOKEN_URL`
-- `INSTAGRAM_OAUTH_TOKEN_ENCODING`
-- `INSTAGRAM_LONG_LIVED_TOKEN_URL`
-- `LEGAL_ENTITY_NAME`
-- `SUPPORT_EMAIL`
+- `app_id`;
+- `oauth_authorize_url`;
+- `oauth_token_url`;
+- `oauth_token_encoding`;
+- `long_lived_token_url`;
+- `graph_base_url`;
+- `graph_api_version`;
+- `identity_probe_path`.
 
-`META_APP_SECRET`, `META_WEBHOOK_VERIFY_TOKEN`, `META_WEBHOOK_SIGNATURE_HEADER` e o provider keyring são Vault-owned no caminho hospedado. Variáveis equivalentes permanecem apenas como fallback local/self-hosting e são proibidas no Blueprint Render Free pelo CI.
+A role `automation_web` possui somente `SELECT` nessa tabela. O dashboard de tenant não pode alterar a configuração global da plataforma.
+
+## Variáveis do web hospedado
+
+O Blueprint Free atual exige apenas:
+
+- `APP_ORIGIN` — derivada da URL externa do serviço;
+- `NEXT_PUBLIC_SUPABASE_URL`;
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` — fornecida ao serviço, não commitada no Blueprint;
+- `DATABASE_URL` — role `automation_web` via Supavisor;
+- `DATABASE_POOL_MAX=3`;
+- `LEGAL_ENTITY_NAME`;
+- `SUPPORT_EMAIL`;
+- `GOOGLE_AUTH_ENABLED=false` enquanto Google OAuth não estiver configurado.
+
+Meta App ID, Graph config e endpoints Instagram são **proibidos no `render.yaml`** pelo CI. Secrets Meta e keyring continuam Vault-owned. Env equivalente existe apenas como fallback portátil/self-hosting em `.env.example`.
 
 ## Conexão PostgreSQL do web
 
-O host web nunca deve usar a senha administrativa do projeto Supabase.
+O host nunca usa a role administrativa `postgres`.
 
-Migration 020 cria `automation_web` com:
+Migration 020 cria `automation_web` com LOGIN e privilégios mínimos; senha randômica fica no Vault. Em deploy público, `apps/web/lib/server/database.ts` recusa uma `DATABASE_URL` administrativa, exige TLS e limita o pool.
 
-- `LOGIN` e senha randômica salva no Vault;
-- `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOINHERIT`, `NOREPLICATION`, `NOBYPASSRLS`;
-- grants explícitos apenas nas tabelas/funções necessárias ao G3;
-- acesso negado a `app_private.runtime_invocation_tokens` e ao schema `vault`;
-- timeouts de statement/lock/idle transaction.
+Para host IPv4, use o **Shared Supavisor Session Pooler** em `5432`:
 
-Em deploy público, `apps/web/lib/server/database.ts` também recusa `DATABASE_URL` administrativa, exige TLS e limita o pool de conexões. `/api/health/ready` faz uma segunda verificação da identidade real da sessão antes de declarar o web pronto.
+- usuário `automation_web.<project-ref>`;
+- senha correspondente a `automation_web_db_password`;
+- `sslmode=require` ou verificação mais forte;
+- hostname exato copiado do painel **Connect** do projeto.
 
-Para um host IPv4, use o **Shared Supavisor Session Pooler** em `5432`. A URL usa o usuário `automation_web.<project-ref>`, a senha do secret `automation_web_db_password` e `sslmode=require` (ou verificação mais forte quando disponível). O hostname exato `aws-[INDEX]-<region>.pooler.supabase.com` deve ser copiado do painel **Connect** do projeto; o índice nunca deve ser adivinhado. O valor final permanece somente como secret `DATABASE_URL` do serviço web.
+Nunca adivinhar o índice do hostname `aws-[INDEX]-<region>.pooler.supabase.com`.
 
-## Web
+## Web Free
 
-`apps/web` continua Next.js e fornece:
+`apps/web` fornece dashboard, Supabase Auth SSR, OAuth/callbacks, APIs protegidas, health/readiness e páginas legais.
 
-- dashboard;
-- Supabase Auth SSR;
-- OAuth/callbacks da Meta;
-- fallback de webhook para portabilidade/self-hosting;
-- APIs protegidas;
-- health/readiness;
-- páginas legais.
+No G3 Free, callbacks críticos do provider ficam no Supabase Edge, não no host web. Isso evita perder webhook/data-deletion quando o web gratuito hiberna.
 
-No G3 Free, o callback público primário da Meta é `https://<project-ref>.supabase.co/functions/v1/instagram-webhook`, não a rota Next. Isso evita perda de webhook quando o web Free estiver hibernado.
+O Blueprint mantém exatamente um serviço web gratuito, sem pre-deploy pago. O workflow `Free Web Blueprint` falha se:
 
-O HOST PASS exige uma URL HTTPS pública para dashboard/OAuth/legal. Durante esta fase só devemos escolher hospedagem com tier gratuito; executor, webhook e data-deletion callback permanecem no Supabase e não dependem do host do web.
+- o plano deixar de ser `free`;
+- provider config voltar ao Render;
+- secrets Vault-owned forem declarados no Blueprint;
+- publishable key voltar a ser commitada;
+- `DATABASE_URL` deixar de ser operator-supplied;
+- pool exceder 3 conexões.
 
 ## Edge Functions
 
 Fontes versionadas:
 
-- `supabase/functions/g3-runtime/index.ts`
-- `supabase/functions/instagram-webhook/index.ts`
-- `supabase/functions/instagram-data-deletion/index.ts`
+- `supabase/functions/g3-runtime/index.ts`;
+- `supabase/functions/instagram-webhook/index.ts`;
+- `supabase/functions/instagram-data-deletion/index.ts`.
 
-`g3-runtime` usa `SUPABASE_DB_URL` fornecida pelo ambiente Supabase. A rota é protegida por token interno próprio (`x-runtime-token`) validado server-side.
+`instagram-webhook` v2 separa readiness do GET e POST: challenge pode ser validado com verify token antes do App Secret existir; POST permanece fail-closed sem App Secret/HMAC válido.
 
-`instagram-webhook` é público para a Meta (`verify_jwt=false`), mas implementa sua própria autenticação: challenge token no GET e HMAC SHA-256 do raw body no POST. O GET pode ser validado antes do App Secret existir; o POST permanece 503/fail-closed enquanto `meta_app_secret` não estiver no Vault.
-
-`instagram-data-deletion` também é público para a Meta (`verify_jwt=false`) e valida o `signed_request` antes de qualquer exclusão. Na ausência do App Secret real, deve responder 503/fail-closed.
-
-HTTP 200 de uma Function prova somente runtime operacional; não é evidência de G3 HOST PASS.
+HTTP 200 de Function não é evidência de HOST PASS.
 
 ## Reliability invariants
 
-- webhook persistido antes do ACK;
-- idempotência por provider event ID/fingerprint;
-- fingerprint incompatível → `SUSPICIOUS_EVENT_COLLISION`;
+- persistência antes de ACK;
+- idempotência e collision guard;
 - leases recuperáveis;
-- retry apenas para rejeição comprovadamente retryable;
-- provider 5xx/timeout/transport pós-dispatch = outcome ambíguo;
-- `SEND_RESULT_UNKNOWN` nunca retorna automaticamente para fila;
-- private reply com claim único por comentário;
-- reconciliation exige evidência e audit log;
-- data deletion nunca faz fuzzy match por nome/username; somente identidade app-scoped validada.
+- retry somente quando comprovadamente seguro;
+- outcome ambíguo → `SEND_RESULT_UNKNOWN`;
+- private reply com claim único;
+- reconciliation auditável;
+- data deletion somente por identidade exata;
+- Security Advisor sem lints antes de mudança de gate.
 
-## Segurança
+## Fallback portátil
 
-- `app_private` permanece server-only;
-- `anon`/`authenticated` não recebem `USAGE` no schema privado;
-- `automation_web` usa grants mínimos e não tem `BYPASSRLS`/admin privileges;
-- `pg_net` instalado no schema `extensions` conforme recomendação do Supabase;
-- funções `SECURITY DEFINER` têm `search_path` explícito e `PUBLIC EXECUTE` revogado quando sensíveis;
-- secrets não usam `NEXT_PUBLIC_`;
-- Vault e envelopes nunca são retornados ao frontend;
-- webhook HMAC usa raw body;
-- runtime token não é HOST PASS evidence;
-- Security Advisor deve permanecer sem lints antes de qualquer mudança de gate.
-
-## Fallback Docker opcional
-
-Ainda existem:
-
-- `apps/worker-ingress`;
-- `apps/worker-outbound`;
-- `Dockerfile`;
-- `compose.yaml`;
-- workflow de imagens GHCR.
-
-Eles preservam portabilidade para self-hosting/escala futura. **Não são requisitos do G3 Free e não devem ser provisionados em um serviço pago durante esta fase sem pedido explícito do usuário.**
-
-O migration runner Docker continua como ferramenta de fallback e opera sobre todos os arquivos portáteis de `database/`, atualmente `001–012` e `021`.
+Continuam disponíveis `apps/worker-ingress`, `apps/worker-outbound`, `Dockerfile`, `compose.yaml` e imagens GHCR. São fallback/self-hosting e **não requisito do G3 Free**.
 
 ## Ordem atual para fechar G3
 
-1. manter Supabase Free runtime saudável;
-2. manter Security Advisor sem lints;
-3. publicar `apps/web` em URL HTTPS usando somente um web service Free;
-4. validar a conexão real do host usando `automation_web` via Supavisor;
-5. configurar callback do Supabase Auth;
+1. manter runtime Supabase e Advisors saudáveis;
+2. publicar `apps/web` em HTTPS usando um único web service Free;
+3. validar `automation_web` via Supavisor no host;
+4. configurar callback do Supabase Auth;
+5. preencher `provider_runtime_config` com App ID/endpoints/probe **validados no App Meta real**;
 6. gravar `meta_app_secret` real no Vault;
-7. configurar App Meta real com OAuth, webhook e data deletion callback;
-8. concluir OAuth real com conta Instagram Business/Creator;
+7. configurar App Meta com OAuth, webhook, privacy e data deletion;
+8. concluir OAuth com conta Instagram Business/Creator;
 9. receber webhook real assinado e confirmar `message.received`;
-10. enviar resposta real pela plataforma;
-11. confirmar `provider_message_id`;
-12. somente então permitir `G3 HOST PASS`.
+10. enviar resposta real pela plataforma e confirmar `provider_message_id`;
+11. somente então permitir `G3 HOST PASS`.
 
 Browser Lab continua fora do G3 e só entra em G12–G13.
