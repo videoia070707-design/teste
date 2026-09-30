@@ -4,6 +4,17 @@ import { getDatabase } from "@/lib/server/database";
 
 export const dynamic = "force-dynamic";
 
+type WorkerService = "worker-ingress" | "worker-outbound";
+
+interface WorkerHeartbeatRow {
+  service: WorkerService;
+  worker_id: string;
+  started_at: string;
+  last_seen_at: string;
+  stopped_at: string | null;
+  fresh: boolean;
+}
+
 export default async function ReliabilityPage() {
   const { membership } = await requireWorkspaceContext();
   const sql = getDatabase();
@@ -76,12 +87,29 @@ export default async function ReliabilityPage() {
     limit 8
   `;
 
+  const workerHeartbeats = await sql<WorkerHeartbeatRow[]>`
+    select
+      service,
+      worker_id,
+      started_at,
+      last_seen_at,
+      stopped_at,
+      (stopped_at is null and last_seen_at >= now() - interval '30 seconds') as fresh
+    from app_private.worker_heartbeats
+    order by last_seen_at desc
+    limit 20
+  `;
+
   const values = metrics ?? {
     unknown_sends: 0,
     dead_messages: 0,
     pending_ingress: 0,
     dead_ingress: 0
   };
+
+  const ingressState = summarizeWorker(workerHeartbeats, "worker-ingress");
+  const outboundState = summarizeWorker(workerHeartbeats, "worker-outbound");
+  const runtimeHealthy = ingressState.status === "RUNNING" && outboundState.status === "RUNNING";
 
   return (
     <>
@@ -91,7 +119,10 @@ export default async function ReliabilityPage() {
           <h1>Falhas explícitas. Recuperação controlada.</h1>
           <p>Eventos, leases, idempotência, reconciliação e dead-letter são evidência operacional, não um spinner infinito.</p>
         </div>
-        <span className="badge accent"><span className="status-dot healthy" /> Durable core active</span>
+        <span className={`badge ${runtimeHealthy ? "accent" : "warning"}`}>
+          <span className={`status-dot ${runtimeHealthy ? "healthy" : "warning"}`} />
+          {runtimeHealthy ? "Workers healthy" : "Worker attention"}
+        </span>
       </header>
 
       <section className="grid metrics">
@@ -115,6 +146,20 @@ export default async function ReliabilityPage() {
           <div className="metric-value">{values.dead_ingress}</div>
           <div className="metric-note">manual investigation required</div>
         </article>
+      </section>
+
+      <section className="section">
+        <div className="section-head">
+          <div><div className="eyebrow">Runtime workers</div><h2>Heartbeat operacional</h2></div>
+          <p>fresh window: 30s</p>
+        </div>
+        <div className="grid two">
+          <WorkerCard label="Ingress worker" state={ingressState} />
+          <WorkerCard label="Outbound worker" state={outboundState} />
+        </div>
+        <div className="notice" style={{ marginTop: 14 }}>
+          Heartbeat comprova processo ativo; não conta como G3 HOST PASS e não substitui evidência de OAuth, webhook real ou envio real.
+        </div>
       </section>
 
       <section className="section grid two">
@@ -204,6 +249,42 @@ export default async function ReliabilityPage() {
       </section>
     </>
   );
+}
+
+function WorkerCard({
+  label,
+  state
+}: {
+  label: string;
+  state: ReturnType<typeof summarizeWorker>;
+}) {
+  const badgeClass = state.status === "RUNNING" ? "good" : state.status === "STALE" ? "warn" : "muted";
+  return (
+    <article className="card compact">
+      <div className="connection-head">
+        <div>
+          <div className="eyebrow">{label}</div>
+          <h2>{state.status}</h2>
+        </div>
+        <span className={`badge ${badgeClass}`}>{state.instances} instance{state.instances === 1 ? "" : "s"}</span>
+      </div>
+      <div className="key-value"><span>Worker ID</span><strong className="mono">{state.workerId ? shortId(state.workerId) : "—"}</strong></div>
+      <div className="key-value"><span>Last seen</span><strong>{state.lastSeenAt ? formatDate(state.lastSeenAt) : "never"}</strong></div>
+    </article>
+  );
+}
+
+function summarizeWorker(rows: WorkerHeartbeatRow[], service: WorkerService) {
+  const matches = rows.filter((row) => row.service === service);
+  const running = matches.find((row) => row.fresh && row.stopped_at === null);
+  const latest = running ?? matches[0] ?? null;
+
+  return {
+    status: running ? "RUNNING" as const : latest?.stopped_at ? "STOPPED" as const : latest ? "STALE" as const : "NOT_SEEN" as const,
+    instances: matches.filter((row) => row.fresh && row.stopped_at === null).length,
+    workerId: latest?.worker_id ?? null,
+    lastSeenAt: latest?.last_seen_at ?? null
+  };
 }
 
 function shortId(value: string): string {
