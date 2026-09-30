@@ -35,7 +35,7 @@ export interface ConnectionHealthSnapshot {
   lastEventAt?: string;
   lastSuccessfulActionAt?: string;
   authValid: boolean;
-  webhookHealthy: boolean;
+  webhookHealthy: boolean | null;
   capabilities: CapabilityDescriptor[];
   diagnostics: string[];
 }
@@ -109,7 +109,7 @@ export class CapabilityRegistry {
 
 export function deriveConnectionHealth(input: {
   authValid: boolean;
-  webhookHealthy: boolean;
+  webhookHealthy: boolean | null;
   recentlyVerified: boolean;
   providerReachable: boolean;
   capabilities: CapabilityDescriptor[];
@@ -117,7 +117,8 @@ export function deriveConnectionHealth(input: {
   if (!input.authValid) return "AUTH_EXPIRED";
   if (!input.providerReachable) return "DISCONNECTED";
   if (!input.recentlyVerified) return "STALE";
-  if (!input.webhookHealthy || input.capabilities.some((capability) => capability.state === "degraded")) {
+  if (input.webhookHealthy === null) return "STALE";
+  if (input.webhookHealthy === false || input.capabilities.some((capability) => capability.state === "degraded")) {
     return "DEGRADED_PARTIAL";
   }
   return "HEALTHY";
