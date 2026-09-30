@@ -78,9 +78,9 @@ export interface AuditRecord {
 
 export const WORKSPACE_PERMISSIONS: Record<WorkspaceRole, readonly string[]> = {
   owner: ["*"],
-  admin: ["connections.manage", "automation.publish", "campaign.send", "contacts.export", "conversation.reply", "analytics.view", "team.manage"],
+  admin: ["connections.manage", "automation.publish", "campaign.send", "contacts.export", "conversation.reply", "analytics.view", "team.manage", "reliability.resolve"],
   automation_manager: ["automation.publish", "analytics.view", "conversation.reply"],
-  supervisor: ["conversation.reply", "analytics.view", "team.assign"],
+  supervisor: ["conversation.reply", "analytics.view", "team.assign", "reliability.resolve"],
   agent: ["conversation.reply"],
   analyst: ["analytics.view"],
   viewer: ["analytics.view"]
