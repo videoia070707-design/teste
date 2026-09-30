@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./connections": "./src/connections.ts",
+    "./messages": "./src/messages.ts",
     "./oauth": "./src/oauth.ts",
     "./secrets": "./src/secrets.ts"
   },
