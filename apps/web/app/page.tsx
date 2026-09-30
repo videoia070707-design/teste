@@ -78,6 +78,7 @@ export default async function OverviewPage() {
           and connection.provider_key = 'instagram.meta.official'
           and connection.provider_mode = 'official'
           and message.direction = 'outbound'
+          and message.message_type = 'text'
           and message.delivery_state in ('SENT','DELIVERED','READ')
           and message.provider_message_id is not null
       ) as outbound_traced
@@ -161,7 +162,7 @@ export default async function OverviewPage() {
           <h2>Instagram Official não ganha PASS por compilação.</h2>
           <div className="key-value"><span>OAuth + encrypted credential</span><strong className={evidence.oauth_ready ? "good" : "warn"}>{evidence.oauth_ready ? "VERIFIED" : "PENDING"}</strong></div>
           <div className="key-value"><span>Signed webhook → message.received</span><strong className={evidence.webhook_message_observed ? "good" : "warn"}>{evidence.webhook_message_observed ? "VERIFIED" : "PENDING"}</strong></div>
-          <div className="key-value"><span>Outbound accepted + provider message ID</span><strong className={evidence.outbound_traced ? "good" : "warn"}>{evidence.outbound_traced ? "VERIFIED" : "PENDING"}</strong></div>
+          <div className="key-value"><span>Outbound DM accepted + provider message ID</span><strong className={evidence.outbound_traced ? "good" : "warn"}>{evidence.outbound_traced ? "VERIFIED" : "PENDING"}</strong></div>
           <p>Somente quando as três evidências existirem no mesmo workspace o G3 muda automaticamente para PASS.</p>
         </article>
 
