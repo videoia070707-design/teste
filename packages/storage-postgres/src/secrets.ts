@@ -136,6 +136,13 @@ export class PostgresEncryptedSecretVault {
     `;
   }
 
+  async detachFromConnection(connectionId: string): Promise<void> {
+    await this.sql`
+      delete from app_private.connection_secret_refs
+      where connection_id = ${connectionId}
+    `;
+  }
+
   async getConnectionReference(connectionId: string): Promise<StoredSecretReference | null> {
     const [row] = await this.sql<{
       secret_store: string;
