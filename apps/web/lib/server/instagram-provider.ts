@@ -62,13 +62,16 @@ interface StoredInstagramCredential {
   expiresAt: string | null;
 }
 
-let provider: InstagramOfficialProvider | undefined;
+let providerPromise: Promise<InstagramOfficialProvider> | undefined;
 
-export function getInstagramOfficialProvider(): InstagramOfficialProvider {
-  if (provider) return provider;
+export function getInstagramOfficialProvider(): Promise<InstagramOfficialProvider> {
+  if (!providerPromise) providerPromise = createProvider();
+  return providerPromise;
+}
 
-  const config = getInstagramApiConfig();
-  provider = new InstagramOfficialProvider(
+async function createProvider(): Promise<InstagramOfficialProvider> {
+  const config = await getInstagramApiConfig();
+  return new InstagramOfficialProvider(
     {
       graphBaseUrl: config.graphBaseUrl,
       apiVersion: config.apiVersion,
@@ -78,8 +81,6 @@ export function getInstagramOfficialProvider(): InstagramOfficialProvider {
     },
     new ServerInstagramCredentialResolver()
   );
-
-  return provider;
 }
 
 function parseCredential(value: string): StoredInstagramCredential {
