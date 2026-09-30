@@ -8,89 +8,98 @@ Referências oficiais usadas no fluxo:
 - Instagram API with Instagram Login: https://www.postman.com/meta/instagram/folder/1z5vxzu/instagram-api-with-instagram-login
 - Instagram Send API: https://www.postman.com/meta/instagram/folder/uxudqu0/send-api
 
-A documentação oficial atual descreve Instagram Login para contas profissionais Business/Creator. O G3 solicita apenas as permissões efetivamente usadas:
+O G3 solicita somente:
 
 - `instagram_business_basic`
 - `instagram_business_manage_messages`
 - `instagram_business_manage_comments`
 
-`instagram_business_content_publish` continua fora do G3 enquanto publishing não estiver implementado.
+`instagram_business_content_publish` permanece fora do G3 enquanto publishing não estiver implementado.
 
 ## 0. Pré-condições
 
-Antes de tocar na Meta, o ambiente precisa ter:
+Antes do teste real contra a Meta:
 
 - Supabase Free runtime saudável (`g3-runtime`, PGMQ, `pg_net`, Cron e heartbeat);
-- Edge Function pública `instagram-webhook` ativa;
-- Edge Function pública `instagram-data-deletion` ativa e protegida por `signed_request` HMAC;
-- migrations 021 (Meta compliance) e 022 (verify token hospedado) presentes;
+- Edge Functions `instagram-webhook` e `instagram-data-deletion` ativas;
+- migrations 021, 022 e 023 aplicadas;
 - Supabase Auth configurado;
-- dashboard web publicado em HTTPS em `APP_ORIGIN`;
-- `DATABASE_URL` do web usando a role least-privilege `automation_web`, nunca `postgres`;
-- conexão pública PostgreSQL criptografada (`sslmode=require` no mínimo);
+- dashboard web HTTPS em `APP_ORIGIN`;
+- `DATABASE_URL` usando `automation_web`, nunca `postgres`;
+- TLS PostgreSQL ativo;
 - `LEGAL_ENTITY_NAME` e `SUPPORT_EMAIL` configurados;
-- `provider_secret_keyring` no Supabase Vault;
-- `meta_webhook_verify_token` gerado no Supabase Vault pela migration 022;
-- `meta_app_secret` real do App Meta no Supabase Vault antes de aceitar POSTs do provider;
-- `META_APP_ID` no web;
-- URLs OAuth/Graph/versionamento explícitas;
-- `INSTAGRAM_IDENTITY_PROBE_PATH` validado contra a API real;
+- `provider_secret_keyring` e `meta_webhook_verify_token` no Vault;
+- `meta_app_secret` real no Vault antes de aceitar POSTs do provider;
+- `app_private.provider_runtime_config` preenchido com App ID/endpoints/probe validados para o App Meta real;
 - Security Advisor sem lints;
-- CI principal, Free Runtime Adapter, Meta Compliance e Free Web Blueprint verdes.
+- CI, Free Runtime Adapter, Meta Compliance e Free Web Blueprint verdes.
 
-Docker ingress/outbound workers **não são pré-condição do G3 Free**. Eles são fallback portátil. O runtime primário é Supabase Edge + PGMQ + Cron.
+Meta App ID, Graph version e endpoints OAuth **não pertencem mais ao Render**. O host recebe somente infraestrutura do web; provider config hospedada vem do Postgres e secrets vêm do Vault.
+
+Docker ingress/outbound workers não são pré-condição do G3 Free.
 
 ### Checkpoint
 
-Abra:
+Abra `/connections/instagram/readiness`.
 
-`/connections/instagram/readiness`
+O Readiness Center consulta `provider_runtime_config` primeiro e usa env somente como fallback self-hosted. Configuração ainda nula no banco deve aparecer como `BLOCKED`, nunca ser preenchida por suposição.
 
-A seção **Runtime configuration** precisa estar pronta. Em ambiente público, `DATABASE_URL TLS` deve estar `READY`.
-
-O verify token não é preenchido manualmente em arquivo/env: a migration 022 o gera aleatoriamente dentro do Vault. O valor só deve ser copiado de forma segura para o App Dashboard da Meta quando o challenge for configurado.
-
-Execute **preflight**. O preflight chama o webhook Edge público com um challenge sintético e exige a resposta exata. Isso comprova rede/TLS/Function/Vault/challenge, mas **não cria raw event, canonical event, mensagem ou HOST PASS**.
-
-O GET de challenge depende somente de `meta_webhook_verify_token`. Portanto, a URL/challenge pode ser validada antes do App Secret existir. Já o POST de webhook continua fail-closed até `meta_app_secret` existir e a assinatura HMAC ser válida.
+Execute o **preflight** do webhook. O GET challenge depende apenas do verify token e pode responder 200 antes do App Secret existir. O POST permanece 503/fail-closed até existir `meta_app_secret` e HMAC válido.
 
 ## 1. Configurar o App Meta
 
-Use um app apropriado ao cenário empresarial e habilite Instagram compatível com **Instagram Login**.
+Use uma configuração compatível com Instagram Login para conta profissional Business/Creator.
 
-No App Dashboard, configure exatamente os valores apresentados pelo Readiness Center:
+No App Dashboard configure exatamente os valores apresentados pelo Readiness Center:
 
 - OAuth redirect URI;
 - webhook callback URL;
 - Privacy Policy URL;
-- URL pública de instruções de exclusão quando o App Dashboard solicitar uma página informativa;
-- callback de Data Deletion quando o App Dashboard solicitar processamento programático.
+- Data Deletion instructions URL quando solicitada;
+- Data Deletion callback quando solicitado processamento programático.
 
-O webhook callback do G3 Free deve apontar para:
+Webhook:
 
 `https://<project-ref>.supabase.co/functions/v1/instagram-webhook`
 
-O callback programático de exclusão deve apontar para:
+Data deletion callback:
 
 `https://<project-ref>.supabase.co/functions/v1/instagram-data-deletion`
 
-A página pública de instruções permanece:
+Página informativa:
 
 `<APP_ORIGIN>/legal/data-deletion`
 
-Não aponte a Meta para a rota Next como webhook primário. O web Free pode hibernar; callbacks do provider precisam continuar disponíveis no Supabase Edge.
+Não use a rota Next como webhook primário: o web Free pode hibernar.
 
-`instagram-data-deletion` usa `verify_jwt=false` porque a Meta não possui sessão Supabase. O POST só é aceito depois de validar o `signed_request` com HMAC-SHA256 usando o `meta_app_secret` real do Vault. A resposta de aceite retorna `url` de status e `confirmation_code`. Replays da mesma solicitação convergem para o mesmo receipt por fingerprint, em vez de criar deleções independentes.
+## 2. Registrar configuração global validada
 
-Registre em **External readiness** as confirmações operacionais. Attestations ajudam o acompanhamento, mas não passam o gate.
+Depois de confirmar no App Meta os valores reais, registre na linha `instagram.meta.official` de `app_private.provider_runtime_config`:
 
-## 2. Preparar conta de teste
+- `app_id`;
+- `oauth_authorize_url`;
+- `oauth_token_url`;
+- `oauth_token_encoding`;
+- `long_lived_token_url`;
+- `graph_base_url`;
+- `graph_api_version`;
+- `identity_probe_path`.
 
-A conta usada no teste deve ser uma conta profissional Instagram **Business ou Creator** e elegível para a configuração selecionada.
+Regras:
 
-Em modo de desenvolvimento, configure os roles/testers exigidos pela Meta para o app e para a conta profissional usada no teste.
+- não copiar endpoints do Instagram Basic Display legado por memória/suposição;
+- não permitir que workspace admin altere essa linha;
+- `automation_web` permanece SELECT-only;
+- versão Graph é pinada e upgrade é explícito;
+- ausência de `identity_probe_path` mantém health em `STALE` em vez de falso `HEALTHY`.
 
-## 3. Concluir OAuth pela própria plataforma
+O App Secret real vai para `meta_app_secret` no Supabase Vault, nunca para `render.yaml`.
+
+## 3. Preparar conta de teste
+
+Use uma conta Instagram profissional **Business ou Creator** elegível para a configuração selecionada. Em development mode, configure os roles/testers exigidos pela Meta.
+
+## 4. Concluir OAuth pela própria plataforma
 
 Na UI:
 
@@ -99,151 +108,113 @@ Na UI:
 Fluxo esperado:
 
 1. usuário autenticado inicia OAuth;
-2. servidor cria `state` aleatório, persiste somente o hash e vincula ator/workspace;
+2. servidor cria `state` aleatório e persiste somente hash + ator/workspace;
 3. usuário autoriza na Meta;
-4. callback revalida usuário + membership + permissão;
-5. `state` é consumido uma única vez;
-6. authorization code é trocado server-side;
-7. Meta App Secret é obtido do Vault pela bridge allowlisted, não por variável pública;
-8. token é promovido ao formato long-lived suportado;
-9. credencial do Instagram é criptografada com o provider keyring;
-10. `channel_connections.auth_valid=true` somente depois da secret reference ser anexada;
-11. a identidade app-scoped retornada/confirmada pelo provider é mantida separada em `provider_subject_id` para callbacks de compliance, sem substituir a identidade de conta usada pela API.
+4. callback revalida usuário, membership e permissão;
+5. `state` é consumido uma vez;
+6. code é trocado server-side usando config do Postgres;
+7. App Secret vem do Vault;
+8. token é promovido para long-lived quando suportado;
+9. credencial Instagram é criptografada com o provider keyring;
+10. `auth_valid=true` somente após secret reference válida;
+11. identidade usada para compliance permanece separada em `provider_subject_id`.
 
-### Evidência esperada
+Sem prova oficial da equivalência entre IDs, não preencher `provider_subject_id` por aproximação.
 
-No Readiness Center:
+### Evidência
 
-- **OAuth real + credencial criptografada = READY**.
+**OAuth real + credencial criptografada = READY**.
 
-Se falhar, não edite tabelas manualmente para “desbloquear” o gate.
+## 5. Configurar e provar webhook real
 
-## 4. Configurar e provar webhook real
+O endpoint implementa dois níveis independentes:
 
-Configure no App Dashboard da Meta as assinaturas necessárias às capacidades do G3 — mensagens e comentários — conforme o produto disponibilizar para o app.
+- GET: challenge com `meta_webhook_verify_token`;
+- POST: HMAC SHA-256 do raw body com `meta_app_secret`.
 
-O endpoint primário implementa dois níveis de readiness independentes:
+Webhook assinado só recebe ACK de sucesso depois da persistência em `webhook_ingress_events`.
 
-- GET: challenge com `meta_webhook_verify_token` lido do Vault;
-- POST: HMAC SHA-256 sobre o **raw body** usando `meta_app_secret` lido do Vault.
+### Evidência
 
-A Function está com `verify_jwt=false` porque a chamada vem da Meta, mas isso não significa endpoint sem autenticação: a autenticação é específica do provider.
+**Webhook assinado persistido = READY**.
 
-Sem verify token, GET responde 503. Com verify token correto, o challenge responde 200 mesmo antes do App Secret existir. Sem App Secret, POST responde 503 e persiste zero eventos. Com App Secret configurado, POST só prossegue depois de validar a assinatura HMAC.
+Ainda não é HOST PASS.
 
-### Regra de persistência
+## 6. Gerar inbound real
 
-Webhook assinado só recebe ACK de sucesso depois que o payload foi persistido em `webhook_ingress_events`. Se a persistência falhar, o endpoint retorna erro para permitir retry do provider.
+De uma segunda conta tester, envie uma DM para a conta profissional conectada.
 
-### Evidência esperada
+Fluxo:
 
-O Readiness Center deve mostrar:
+`Meta → instagram-webhook → durable ingress → PGMQ → g3-runtime → raw event → canonical message.received`
 
-- **Webhook assinado persistido = READY**.
+Não use DM fria como teste. A plataforma responde somente a identidade observada em inbound válido na mesma conexão.
 
-Isto ainda não basta para HOST PASS: precisamos de uma mensagem real normalizada.
+### Evidência
 
-## 5. Gerar inbound real
+**Mensagem real normalizada = READY**.
 
-A partir de uma **segunda conta Instagram de teste**, envie uma DM para a conta profissional conectada.
+## 7. Responder pela plataforma
 
-Não use DM fria como teste. O G3 responde apenas a uma identidade observada em `message.received` verificado na mesma conexão.
+Fluxo:
 
-Fluxo esperado:
+`web enqueue → QUEUED → PGMQ → g3-runtime → InstagramOfficialProvider → Meta Send API → provider_message_id → SENT`
 
-`Meta → instagram-webhook Edge → durable ingress → PGMQ wake-up → g3-runtime → raw event → normalizer → canonical event message.received`
+O Send API usa a base/versionamento configurados no provider runtime config. Não espalhar versão hardcoded pelo código.
 
-### Evidência esperada
-
-No Readiness Center:
-
-- **Mensagem real normalizada = READY**.
-
-No Reliability Center, deve existir o evento canônico correspondente.
-
-## 6. Responder pela plataforma
-
-No Readiness Center, envie o challenge exato mostrado pela UI a partir da segunda conta tester. A plataforma só habilita a resposta HOST PASS depois de observar esse `message.received` específico.
-
-Fluxo esperado:
-
-`web enqueue → message QUEUED → PGMQ signal → g3-runtime claim → InstagramOfficialProvider → Meta Send API → provider_message_id → SENT`
-
-O Send API oficial usa a forma:
-
-`https://graph.instagram.com/{api_version}/{ig_user_id}/messages`
-
-A versão é configuração explícita; não deve ser hardcoded em múltiplos pontos.
-
-### Evidência esperada
-
-No banco/Readiness Center:
+### Evidência
 
 - outbound `message_type='text'`;
-- `delivery_state` em `SENT`, `DELIVERED` ou `READ`;
-- `provider_message_id` real retornado pela Meta.
+- estado `SENT`, `DELIVERED` ou `READ`;
+- `provider_message_id` real.
 
-No Readiness Center:
+**Resposta DM real rastreada = READY**.
 
-- **Resposta DM real rastreada = READY**.
+## 8. Resultado do gate
 
-## 7. Resultado do gate
-
-G3 HOST PASS só pode ficar verdadeiro quando, no mesmo workspace, coexistirem:
+G3 HOST PASS só fica verdadeiro quando coexistem no mesmo workspace:
 
 - OAuth real + secret reference válida;
-- `message.received` de webhook real;
-- outbound text DM real com `provider_message_id`.
+- `message.received` real;
+- outbound text real com `provider_message_id`.
 
-O Overview deriva o estado do banco. Não existe botão administrativo para forçar PASS.
+Não existe botão administrativo para forçar PASS.
 
-## 8. Casos de falha que NÃO autorizam retry cego
+## 9. Falhas que não autorizam retry cego
 
-Se a chamada à Meta:
+Timeout/5xx/transport pós-dispatch, 2xx sem ID suficiente ou persistência falhando após side effect devem convergir para `SEND_RESULT_UNKNOWN`.
 
-- atingir timeout depois do dispatch;
-- fechar transporte depois do dispatch;
-- retornar 5xx ambíguo;
-- retornar 2xx sem ID suficiente para confirmar o side effect;
-- for aceita pela Meta mas a persistência do resultado falhar;
+Reconciliação exige evidência externa + AuditLog.
 
-então o estado deve convergir para:
+## 10. Data deletion
 
-`SEND_RESULT_UNKNOWN`
+Fluxo:
 
-A mensagem não volta automaticamente à fila. Reconciliação exige evidência externa + AuditLog.
-
-## 9. Data deletion — prova separada de compliance
-
-Data deletion não conta como evidência de HOST PASS de mensagens, mas precisa estar funcional antes de abrir o produto a usuários reais.
-
-Fluxo esperado:
-
-`Meta signed_request → instagram-data-deletion → HMAC verify → receipt hashed → exact provider_subject_id deletion → confirmation status`
+`Meta signed_request → instagram-data-deletion → HMAC verify → receipt hashed → exact provider_subject_id deletion → status`
 
 Regras:
 
-- nunca fazer fuzzy match por nome, username ou external account parecido;
-- nunca gravar o `signed_request` bruto nem o provider subject plaintext no receipt;
-- conexão legada sem `provider_subject_id` resolvível vai para `MANUAL_REVIEW`;
-- a solicitação repetida usa o mesmo fingerprint/receipt;
-- o status público não expõe identificadores internos, secrets ou identidade do usuário;
-- o workflow `Meta Compliance` deve permanecer verde para provar isolamento de deleção e bloqueio para roles públicas.
+- nunca fuzzy match por nome/username;
+- nunca reter signed request bruto no receipt;
+- sem identidade exata resolvida → `MANUAL_REVIEW`;
+- replay converge por fingerprint;
+- status público não expõe identidade/secrets;
+- workflow `Meta Compliance` deve permanecer verde.
 
-## 10. Evidência que deve ser preservada após o teste
+Data deletion não conta como evidência de HOST PASS de mensagens, mas deve estar funcional antes de usuários reais.
 
-- `channel_connections` da conexão oficial;
+## 11. Evidência a preservar
+
+- conexão oficial;
 - secret reference criptografada;
-- `webhook_ingress_events` do evento real;
-- `raw_events` e `canonical_events` relevantes;
-- outbound `messages` com `provider_message_id`;
-- AuditLogs das ações manuais;
-- heartbeat do runtime durante a janela do teste.
+- webhook ingress real;
+- raw/canonical events relevantes;
+- outbound com provider message ID;
+- AuditLogs;
+- heartbeat do runtime durante o teste.
 
-Para exclusão iniciada pelo provider, o receipt mínimo em `data_deletion_requests` substitui a retenção dos dados apagados e contém somente hashes, contadores, status e confirmation code.
+Nunca guardar tokens ou secrets em logs genéricos.
 
-Não guardar tokens ou secrets em logs de aplicação genéricos.
+## 12. Critério para avançar ao G4
 
-## 11. Critério para avançar ao G4
-
-Somente depois de o dashboard derivar **G3 HOST PASS** com as provas acima, e de os callbacks de compliance estarem configurados corretamente no App Meta, o roadmap libera implementação/validação do **G4 — WhatsApp Official**.
+Somente após **G3 HOST PASS real** e callbacks de compliance configurados corretamente, o roadmap libera **G4 — WhatsApp Official**.
