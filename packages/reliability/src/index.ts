@@ -78,11 +78,13 @@ export function applyProviderStatusEvent(
     return current;
   }
 
+  const providerMessageId = incoming.providerMessageId ?? current.providerMessageId;
+
   return {
     state: incoming.state,
-    providerMessageId: incoming.providerMessageId ?? current.providerMessageId,
+    ...(providerMessageId ? { providerMessageId } : {}),
     lastProviderTimestamp: incoming.providerTimestamp,
-    lastErrorCode: incoming.errorCode,
+    ...(incoming.errorCode ? { lastErrorCode: incoming.errorCode } : {}),
     reconciliationRequired: false
   };
 }
