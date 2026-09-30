@@ -59,7 +59,18 @@ export class PostgresMessageStore {
         ${this.sql.json(asJsonValue(input.payload))}
       )
       on conflict (connection_id, idempotency_key) do nothing
-      returning ${messageColumns(this.sql)}
+      returning
+        id,
+        workspace_id,
+        connection_id,
+        provider_message_id,
+        idempotency_key,
+        correlation_id,
+        delivery_state,
+        reconciliation_required,
+        last_provider_timestamp,
+        last_error_code,
+        payload
     `;
 
     if (created) return { message: mapMessage(created), created: true };
@@ -78,7 +89,18 @@ export class PostgresMessageStore {
         updated_at = now()
       where id = ${messageId}
         and delivery_state in ('CREATED','QUEUED','RETRYING')
-      returning ${messageColumns(this.sql)}
+      returning
+        id,
+        workspace_id,
+        connection_id,
+        provider_message_id,
+        idempotency_key,
+        correlation_id,
+        delivery_state,
+        reconciliation_required,
+        last_provider_timestamp,
+        last_error_code,
+        payload
     `;
 
     if (!row) throw new Error("MESSAGE_NOT_SENDABLE");
@@ -103,7 +125,18 @@ export class PostgresMessageStore {
         reconciliation_required = ${input.reconciliationRequired},
         updated_at = now()
       where id = ${input.messageId}
-      returning ${messageColumns(this.sql)}
+      returning
+        id,
+        workspace_id,
+        connection_id,
+        provider_message_id,
+        idempotency_key,
+        correlation_id,
+        delivery_state,
+        reconciliation_required,
+        last_provider_timestamp,
+        last_error_code,
+        payload
     `;
 
     if (!row) throw new Error("MESSAGE_NOT_FOUND");
@@ -112,7 +145,18 @@ export class PostgresMessageStore {
 
   async getByIdempotencyKey(connectionId: string, idempotencyKey: string): Promise<StoredOutboundMessage | null> {
     const [row] = await this.sql<MessageRow[]>`
-      select ${messageColumns(this.sql)}
+      select
+        id,
+        workspace_id,
+        connection_id,
+        provider_message_id,
+        idempotency_key,
+        correlation_id,
+        delivery_state,
+        reconciliation_required,
+        last_provider_timestamp,
+        last_error_code,
+        payload
       from app_private.messages
       where connection_id = ${connectionId}
         and idempotency_key = ${idempotencyKey}
@@ -135,22 +179,6 @@ interface MessageRow {
   last_provider_timestamp: string | null;
   last_error_code: string | null;
   payload: unknown;
-}
-
-function messageColumns(sql: DatabaseClient): ReturnType<DatabaseClient> {
-  return sql`
-    id,
-    workspace_id,
-    connection_id,
-    provider_message_id,
-    idempotency_key,
-    correlation_id,
-    delivery_state,
-    reconciliation_required,
-    last_provider_timestamp,
-    last_error_code,
-    payload
-  `;
 }
 
 function mapMessage(row: MessageRow): StoredOutboundMessage {
