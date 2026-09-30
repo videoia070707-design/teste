@@ -13,6 +13,18 @@ export interface InstagramWebhookMessageEvent {
   raw: unknown;
 }
 
+export interface InstagramWebhookCommentEvent {
+  providerEventId: string;
+  accountId: string;
+  commentId: string;
+  mediaId: string;
+  occurredAt: string;
+  text?: string;
+  commenterId?: string;
+  commenterUsername?: string;
+  raw: unknown;
+}
+
 export function extractInstagramAccountIds(payload: unknown): string[] {
   if (!isRecord(payload) || !Array.isArray(payload.entry)) return [];
   const ids = new Set<string>();
@@ -55,6 +67,28 @@ export function normalizeInstagramMessageWebhook(payload: unknown): InstagramWeb
   return results;
 }
 
+export function normalizeInstagramCommentWebhook(payload: unknown): InstagramWebhookCommentEvent[] {
+  if (!isRecord(payload) || payload.object !== "instagram" || !Array.isArray(payload.entry)) return [];
+
+  const results: InstagramWebhookCommentEvent[] = [];
+
+  for (const entry of payload.entry) {
+    if (!isRecord(entry) || !Array.isArray(entry.changes)) continue;
+    const accountId = typeof entry.id === "string" ? entry.id : "";
+    const entryTimestamp = entry.time;
+
+    for (const change of entry.changes) {
+      if (!isRecord(change) || (change.field !== "comments" && change.field !== "live_comments")) continue;
+      if (!isRecord(change.value)) continue;
+
+      const normalized = normalizeCommentChange(accountId, entryTimestamp, change.value);
+      if (normalized) results.push(normalized);
+    }
+  }
+
+  return results;
+}
+
 function normalizeMessagingEvent(accountId: string, rawEvent: unknown): InstagramWebhookMessageEvent | null {
   if (!isRecord(rawEvent)) return null;
   const sender = isRecord(rawEvent.sender) ? rawEvent.sender : null;
@@ -90,10 +124,77 @@ function normalizeMessagingEvent(accountId: string, rawEvent: unknown): Instagra
   };
 }
 
+function normalizeCommentChange(
+  accountId: string,
+  entryTimestamp: unknown,
+  value: Record<string, unknown>
+): InstagramWebhookCommentEvent | null {
+  const commentId = typeof value.id === "string" ? value.id : "";
+  const media = isRecord(value.media) ? value.media : null;
+  const mediaId = typeof value.media_id === "string"
+    ? value.media_id
+    : media && typeof media.id === "string"
+      ? media.id
+      : "";
+
+  if (!accountId || !commentId || !mediaId) return null;
+
+  const from = isRecord(value.from) ? value.from : null;
+  const commenterId = from && typeof from.id === "string" && from.id ? from.id : undefined;
+  const commenterUsername = from && typeof from.username === "string" && from.username
+    ? from.username
+    : typeof value.username === "string" && value.username
+      ? value.username
+      : undefined;
+  const text = typeof value.text === "string" ? value.text : undefined;
+  const rawTimestamp = value.created_time ?? value.timestamp ?? entryTimestamp;
+  const occurredAt = normalizeTimestamp(rawTimestamp);
+
+  // A comment can be delivered more than once, and a future provider change may
+  // emit a later update for the same comment. Including the provider timestamp
+  // keeps retries idempotent while not forcing all future comment updates into
+  // a false collision under one bare comment ID.
+  const timestampKey = occurredAt === new Date(0).toISOString()
+    ? createHash("sha256").update(stableJson(value)).digest("hex").slice(0, 20)
+    : String(Date.parse(occurredAt));
+
+  return {
+    providerEventId: `ig-comment:${commentId}:${timestampKey}`,
+    accountId,
+    commentId,
+    mediaId,
+    occurredAt,
+    ...(text !== undefined ? { text } : {}),
+    ...(commenterId ? { commenterId } : {}),
+    ...(commenterUsername ? { commenterUsername } : {}),
+    raw: value
+  };
+}
+
 function normalizeTimestamp(value: unknown): string {
+  if (typeof value === "string" && value) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return normalizeTimestamp(numeric);
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return new Date(parsed).toISOString();
+  }
+
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return new Date(0).toISOString();
   const milliseconds = value < 1_000_000_000_000 ? value * 1000 : value;
   return new Date(milliseconds).toISOString();
+}
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(sortJson(value));
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson);
+  if (!isRecord(value)) return value;
+
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(value).sort()) sorted[key] = sortJson(value[key]);
+  return sorted;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
