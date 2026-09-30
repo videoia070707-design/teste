@@ -66,7 +66,7 @@ export async function GET(request: Request): Promise<Response> {
   let newReferenceAttached = false;
 
   try {
-    const config = getInstagramServerConfig();
+    const config = await getInstagramServerConfig();
     const authorizationPayload = await exchangeInstagramAuthorizationCode(config.oauth, code);
     const shortLived = parseInstagramAuthorizationToken(authorizationPayload);
     const longLived = await exchangeInstagramLongLivedToken({
