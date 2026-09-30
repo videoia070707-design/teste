@@ -14,6 +14,10 @@ function getAppOrigin(): string {
   return new URL(configured).origin;
 }
 
+function isGoogleAuthEnabled(): boolean {
+  return process.env.GOOGLE_AUTH_ENABLED === "true";
+}
+
 export async function signInWithEmail(formData: FormData): Promise<void> {
   const email = getRequiredString(formData, "email");
   const password = getRequiredString(formData, "password");
@@ -49,6 +53,8 @@ export async function signUpWithEmail(formData: FormData): Promise<void> {
 }
 
 export async function signInWithGoogle(): Promise<void> {
+  if (!isGoogleAuthEnabled()) redirect("/login?error=google_not_configured");
+
   const supabase = await createClient();
   const origin = getAppOrigin();
 
