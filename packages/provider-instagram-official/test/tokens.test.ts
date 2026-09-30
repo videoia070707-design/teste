@@ -6,7 +6,7 @@ import {
 } from "../src/tokens";
 
 test("self profile keeps app-scoped id separate from professional user_id", async () => {
-  let requestedUrl: URL | null = null;
+  const requestedUrls: URL[] = [];
   let authorization: string | null = null;
 
   const profile = await fetchInstagramSelfProfile({
@@ -14,7 +14,7 @@ test("self profile keeps app-scoped id separate from professional user_id", asyn
     apiVersion: "v26.0",
     accessToken: "long-lived-token",
     fetchImpl: async (input, init) => {
-      requestedUrl = new URL(String(input));
+      requestedUrls.push(new URL(String(input)));
       authorization = new Headers(init?.headers).get("authorization");
       return Response.json({
         id: "app-scoped-123",
@@ -25,9 +25,11 @@ test("self profile keeps app-scoped id separate from professional user_id", asyn
     }
   });
 
-  assert.equal(requestedUrl?.origin, "https://graph.instagram.com");
-  assert.equal(requestedUrl?.pathname, "/v26.0/me");
-  assert.equal(requestedUrl?.searchParams.get("fields"), "id,user_id,username,account_type");
+  const requestedUrl = requestedUrls[0];
+  assert.ok(requestedUrl, "self-profile request URL was not captured");
+  assert.equal(requestedUrl.origin, "https://graph.instagram.com");
+  assert.equal(requestedUrl.pathname, "/v26.0/me");
+  assert.equal(requestedUrl.searchParams.get("fields"), "id,user_id,username,account_type");
   assert.equal(authorization, "Bearer long-lived-token");
   assert.deepEqual(profile, {
     appScopedId: "app-scoped-123",
