@@ -29,6 +29,18 @@ test("stale verification is not reported as healthy", () => {
   assert.equal(state, "STALE");
 });
 
+test("unknown webhook health is STALE instead of falsely HEALTHY", () => {
+  const state = deriveConnectionHealth({
+    authValid: true,
+    webhookHealthy: null,
+    recentlyVerified: true,
+    providerReachable: true,
+    capabilities: [{ key: "messages.receive", state: "available" }]
+  });
+
+  assert.equal(state, "STALE");
+});
+
 test("expired auth takes precedence over provider reachability", () => {
   const state = deriveConnectionHealth({
     authValid: false,
