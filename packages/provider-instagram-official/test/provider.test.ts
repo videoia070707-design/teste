@@ -116,6 +116,82 @@ test("successful text send returns provider message id", async () => {
   });
 });
 
+test("public comment reply uses comment replies edge and requires returned id", async () => {
+  let requestUrl = "";
+  let requestBody = "";
+
+  const provider = new InstagramOfficialProvider(baseConfig, credentials, async (input, init) => {
+    requestUrl = String(input);
+    requestBody = String(init?.body ?? "");
+    return new Response(JSON.stringify({ id: "reply-comment-1" }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  });
+
+  const result = await provider.replyToComment({
+    connectionId: connection.id,
+    commentId: "comment-1",
+    text: "Te respondi 🙌",
+    idempotencyKey: "comment-reply-1",
+    correlationId: "corr-comment-1"
+  });
+
+  assert.equal(result.kind, "accepted");
+  if (result.kind === "accepted") assert.equal(result.providerMessageId, "reply-comment-1");
+  assert.match(requestUrl, /v-test\/comment-1\/replies$/);
+  assert.deepEqual(JSON.parse(requestBody), { message: "Te respondi 🙌" });
+});
+
+test("private comment reply targets comment_id through messages edge", async () => {
+  let requestUrl = "";
+  let requestBody = "";
+
+  const provider = new InstagramOfficialProvider(baseConfig, credentials, async (input, init) => {
+    requestUrl = String(input);
+    requestBody = String(init?.body ?? "");
+    return new Response(JSON.stringify({ recipient_id: "ig-user-4", message_id: "private-mid-1" }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  });
+
+  const result = await provider.privateReplyToComment({
+    connectionId: connection.id,
+    commentId: "comment-1",
+    text: "Aqui está o link",
+    idempotencyKey: "private-reply-1",
+    correlationId: "corr-private-1"
+  });
+
+  assert.equal(result.kind, "accepted");
+  if (result.kind === "accepted") assert.equal(result.providerMessageId, "private-mid-1");
+  assert.match(requestUrl, /v-test\/17890000000000000\/messages$/);
+  assert.deepEqual(JSON.parse(requestBody), {
+    recipient: { comment_id: "comment-1" },
+    message: { text: "Aqui está o link" }
+  });
+});
+
+test("successful comment reply without provider id is treated as unknown", async () => {
+  const provider = new InstagramOfficialProvider(baseConfig, credentials, async () => {
+    return new Response(JSON.stringify({ success: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+  });
+
+  const result = await provider.replyToComment({
+    connectionId: connection.id,
+    commentId: "comment-2",
+    text: "Oi",
+    idempotencyKey: "comment-reply-2",
+    correlationId: "corr-comment-2"
+  });
+
+  assert.equal(result.kind, "unknown");
+});
+
 test("successful HTTP response without message_id is treated as unknown", async () => {
   const provider = new InstagramOfficialProvider(baseConfig, credentials, async () => {
     return new Response(JSON.stringify({ recipient_id: "ig-user-1" }), {
