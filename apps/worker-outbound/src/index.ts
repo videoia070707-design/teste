@@ -6,15 +6,11 @@ import {
   type InstagramCredentialResolver,
   type InstagramCredentials
 } from "@automation/provider-instagram-official";
-import {
-  applyProviderSendResult,
-  DEFAULT_RETRY_POLICY,
-  nextRetryDelaySeconds,
-  type MessageDeliverySnapshot
-} from "@automation/reliability";
+import { applyProviderSendResult, type MessageDeliverySnapshot } from "@automation/reliability";
 import { AesGcmSecretCipher, StaticSecretKeyring } from "@automation/secrets";
 import { createDatabaseClient, type DatabaseClient } from "@automation/storage-postgres";
 import { PostgresEncryptedSecretVault } from "@automation/storage-postgres/secrets";
+import { EXPIRED_PROCESSING_RECOVERY, retryDelayForClaimedAttempt } from "./policy";
 
 const PROVIDER_KEY = "instagram.meta.official";
 const SECRET_PURPOSE = "instagram.credentials";
@@ -79,9 +75,9 @@ async function quarantineExpiredProcessing(sql: DatabaseClient): Promise<void> {
   await sql`
     update app_private.messages
     set
-      delivery_state = 'SEND_RESULT_UNKNOWN',
-      reconciliation_required = true,
-      last_error_code = 'WORKER_LEASE_EXPIRED_AFTER_DISPATCH_POSSIBLE',
+      delivery_state = ${EXPIRED_PROCESSING_RECOVERY.deliveryState},
+      reconciliation_required = ${EXPIRED_PROCESSING_RECOVERY.reconciliationRequired},
+      last_error_code = ${EXPIRED_PROCESSING_RECOVERY.errorCode},
       locked_at = null,
       locked_until = null,
       locked_by = null,
@@ -178,7 +174,6 @@ async function processMessage(
   } catch (error) {
     // The provider adapter only throws for failures before it can safely report
     // a transport outcome (for example credential decryption/configuration).
-    // These are definitive local failures and are safe to mark FAILED.
     await finishDefinitiveFailure(
       sql,
       message.id,
@@ -211,11 +206,9 @@ async function processMessage(
 
     await persistSnapshot(sql, message.id, snapshot);
   } catch (error) {
-    // CRITICAL: the provider call has already happened. Do not mark FAILED and
-    // do not release the lease for retry. Leave PROCESSING untouched so the
-    // finite lease expires and quarantineExpiredProcessing() converts it into
-    // SEND_RESULT_UNKNOWN. This prevents duplicate side effects after a DB
-    // failure that occurs after Meta may have accepted the message.
+    // The provider call already happened. We deliberately keep PROCESSING and
+    // the lease intact. Expiry converts the message to SEND_RESULT_UNKNOWN,
+    // preventing an unsafe duplicate retry after a post-dispatch DB failure.
     console.error("Failed to persist outbound provider outcome; preserving PROCESSING lease", {
       messageId: message.id,
       correlationId: message.correlationId,
@@ -223,11 +216,6 @@ async function processMessage(
       error: error instanceof Error ? error.message : "UNKNOWN_PERSISTENCE_FAILURE"
     });
   }
-}
-
-function retryDelayForClaimedAttempt(attemptCount: number): number | null {
-  if (attemptCount >= DEFAULT_RETRY_POLICY.maxAttempts) return null;
-  return nextRetryDelaySeconds(Math.max(0, attemptCount - 1));
 }
 
 async function persistSnapshot(
