@@ -73,7 +73,9 @@ export async function updateSession(request: NextRequest): Promise<NextResponse>
 }
 
 function copyAuthState(source: NextResponse, target: NextResponse): void {
-  target.cookies.setAll(source.cookies.getAll());
+  for (const cookie of source.cookies.getAll()) {
+    target.cookies.set(cookie.name, cookie.value);
+  }
 
   for (const header of CACHE_HEADERS) {
     const value = source.headers.get(header);
