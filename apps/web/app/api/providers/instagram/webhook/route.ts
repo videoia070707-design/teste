@@ -6,12 +6,13 @@ import {
 } from "@automation/provider-instagram-official";
 import { PostgresWebhookIngressStore } from "@automation/storage-postgres";
 import { getDatabase } from "@/lib/server/database";
+import { getPlatformSecret, type PlatformSecretName } from "@/lib/server/platform-secrets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-  const expectedToken = process.env.META_WEBHOOK_VERIFY_TOKEN;
+  const expectedToken = await readSecret("META_WEBHOOK_VERIFY_TOKEN", "meta_webhook_verify_token");
   if (!expectedToken) return new Response("Webhook verification is not configured.", { status: 503 });
 
   const url = new URL(request.url);
@@ -27,10 +28,11 @@ export async function GET(request: Request): Promise<Response> {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  const appSecret = process.env.META_APP_SECRET;
+  const appSecret = await readSecret("META_APP_SECRET", "meta_app_secret");
   if (!appSecret) return new Response("Webhook signature verification is not configured.", { status: 503 });
 
-  const signatureHeaderName = (process.env.META_WEBHOOK_SIGNATURE_HEADER || "x-hub-signature-256").toLowerCase();
+  const configuredHeader = await readSecret("META_WEBHOOK_SIGNATURE_HEADER", "meta_webhook_signature_header");
+  const signatureHeaderName = (configuredHeader || "x-hub-signature-256").toLowerCase();
   const rawBody = new Uint8Array(await request.arrayBuffer());
   const signature = request.headers.get(signatureHeaderName);
 
@@ -81,6 +83,17 @@ export async function POST(request: Request): Promise<Response> {
     // Do not ACK a valid provider event that we failed to persist. The provider
     // can retry instead of us silently losing the event.
     return new Response("Webhook persistence unavailable", { status: 503 });
+  }
+}
+
+async function readSecret(envName: string, platformName: PlatformSecretName): Promise<string | null> {
+  const legacy = process.env[envName]?.trim();
+  if (legacy) return legacy;
+
+  try {
+    return (await getPlatformSecret(platformName))?.trim() || null;
+  } catch {
+    return null;
   }
 }
 
