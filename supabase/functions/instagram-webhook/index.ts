@@ -18,13 +18,12 @@ Deno.serve(async (request: Request) => {
   });
 
   try {
-    const secrets = await loadWebhookSecrets(sql);
-    if (!secrets) {
-      return new Response("Webhook verification is not configured.", { status: 503 });
-    }
-
     if (request.method === "GET") {
-      return handleChallenge(request, secrets.verifyToken);
+      const verifyToken = await loadVerifyToken(sql);
+      if (!verifyToken) {
+        return new Response("Webhook challenge verification is not configured.", { status: 503 });
+      }
+      return handleChallenge(request, verifyToken);
     }
 
     if (request.method !== "POST") {
@@ -34,38 +33,54 @@ Deno.serve(async (request: Request) => {
       });
     }
 
+    const secrets = await loadWebhookPostSecrets(sql);
+    if (!secrets) {
+      return new Response("Webhook signature verification is not configured.", { status: 503 });
+    }
+
     return await handleWebhook(sql, request, secrets.appSecret, secrets.signatureHeaderName);
   } catch (error) {
-    console.error("instagram-webhook failed", error);
+    console.error("instagram-webhook failed", safeErrorCode(error));
     return new Response("Webhook persistence unavailable", { status: 503 });
   } finally {
     await sql.end({ timeout: 3 });
   }
 });
 
-interface WebhookSecrets {
+interface WebhookPostSecrets {
   appSecret: string;
-  verifyToken: string;
   signatureHeaderName: string;
 }
 
-async function loadWebhookSecrets(sql: ReturnType<typeof postgres>): Promise<WebhookSecrets | null> {
+async function loadVerifyToken(sql: ReturnType<typeof postgres>): Promise<string | null> {
+  const [row] = await sql<{ decrypted_secret: string }[]>`
+    select decrypted_secret
+    from vault.decrypted_secrets
+    where name = 'meta_webhook_verify_token'
+    order by created_at desc
+    limit 1
+  `;
+
+  return row?.decrypted_secret?.trim() || null;
+}
+
+async function loadWebhookPostSecrets(
+  sql: ReturnType<typeof postgres>
+): Promise<WebhookPostSecrets | null> {
   const rows = await sql<{ name: string; decrypted_secret: string }[]>`
     select name, decrypted_secret
     from vault.decrypted_secrets
-    where name in ('meta_app_secret', 'meta_webhook_verify_token', 'meta_webhook_signature_header')
+    where name in ('meta_app_secret', 'meta_webhook_signature_header')
   `;
 
   const byName = new Map(rows.map((row) => [row.name, row.decrypted_secret]));
   const appSecret = byName.get("meta_app_secret")?.trim();
-  const verifyToken = byName.get("meta_webhook_verify_token")?.trim();
   const configuredHeader = byName.get("meta_webhook_signature_header")?.trim().toLowerCase();
 
-  if (!appSecret || !verifyToken) return null;
+  if (!appSecret) return null;
 
   return {
     appSecret,
-    verifyToken,
     signatureHeaderName: configuredHeader || DEFAULT_SIGNATURE_HEADER
   };
 }
@@ -259,6 +274,12 @@ function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(...chunk);
   }
   return btoa(binary);
+}
+
+function safeErrorCode(error: unknown): string {
+  if (!(error instanceof Error)) return "UNKNOWN_ERROR";
+  const normalized = error.message.toUpperCase().replace(/[^A-Z0-9_]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized.slice(0, 120) || "UNKNOWN_ERROR";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
