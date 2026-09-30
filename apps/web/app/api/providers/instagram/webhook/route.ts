@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  extractInstagramAccountIds,
   verifyHmacSha256Signature,
   verifyWebhookChallenge
 } from "@automation/provider-instagram-official";
@@ -48,7 +49,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const bodySha256 = createHash("sha256").update(rawBody).digest("hex");
-  const providerAccountIds = extractEntryAccountIds(parsedPayload);
+  const providerAccountIds = extractInstagramAccountIds(parsedPayload);
   const headers = selectWebhookHeaders(request.headers, signatureHeaderName);
 
   try {
@@ -83,16 +84,6 @@ export async function POST(request: Request): Promise<Response> {
   }
 }
 
-function extractEntryAccountIds(payload: unknown): string[] {
-  if (!isRecord(payload) || !Array.isArray(payload.entry)) return [];
-
-  const ids = new Set<string>();
-  for (const entry of payload.entry) {
-    if (isRecord(entry) && typeof entry.id === "string" && entry.id) ids.add(entry.id);
-  }
-  return [...ids];
-}
-
 function selectWebhookHeaders(headers: Headers, signatureHeaderName: string): Record<string, string> {
   const allowList = new Set([
     "content-type",
@@ -106,8 +97,4 @@ function selectWebhookHeaders(headers: Headers, signatureHeaderName: string): Re
     if (allowList.has(key.toLowerCase())) selected[key.toLowerCase()] = value;
   }
   return selected;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
