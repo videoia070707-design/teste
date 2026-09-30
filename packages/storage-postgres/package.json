@@ -8,6 +8,7 @@
     "./connections": "./src/connections.ts",
     "./messages": "./src/messages.ts",
     "./oauth": "./src/oauth.ts",
+    "./runtime": "./src/runtime.ts",
     "./secrets": "./src/secrets.ts"
   },
   "scripts": {
