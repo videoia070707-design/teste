@@ -6,10 +6,16 @@ import { buildInstagramReadinessReport, type ReadinessState } from "@/lib/server
 
 export const dynamic = "force-dynamic";
 
-export default async function InstagramReadinessPage() {
+export default async function InstagramReadinessPage({
+  searchParams
+}: {
+  searchParams: Promise<{ preflight?: string }>;
+}) {
   const { membership } = await requireWorkspaceContext();
   const report = await buildInstagramReadinessReport(getDatabase(), membership.workspaceId);
   const canManage = can(membership.role as WorkspaceRole, "connections.manage");
+  const params = await searchParams;
+  const preflight = params.preflight === "ready" || params.preflight === "blocked" ? params.preflight : null;
 
   return (
     <>
@@ -31,7 +37,20 @@ export default async function InstagramReadinessPage() {
       <div className="connection-actions">
         <Link className="button" href="/connections">Voltar para Connections</Link>
         <a className="button primary" href="/api/connections/instagram/start">Conectar / reautorizar Instagram</a>
+        {canManage && (
+          <form action="/api/connections/instagram/readiness/self-test" method="post">
+            <button className="button" type="submit">Executar preflight local</button>
+          </form>
+        )}
       </div>
+
+      {preflight && (
+        <div className={`notice ${preflight === "blocked" ? "warning" : ""}`} style={{ marginTop: 16 }}>
+          {preflight === "ready"
+            ? "Preflight local passou: configuração estrutural + challenge criptográfico estão prontos. Isso NÃO conta como HOST PASS."
+            : "Preflight local bloqueado: uma ou mais configurações estruturais ainda precisam ser corrigidas. Nenhuma evidência real foi alterada."}
+        </div>
+      )}
 
       <section className="section grid two">
         <article className="card">
