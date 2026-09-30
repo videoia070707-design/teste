@@ -4,7 +4,11 @@ import {
   normalizeInstagramCommentWebhook,
   normalizeInstagramMessageWebhook
 } from "@automation/provider-instagram-official/webhooks";
-import { createDatabaseClient, type DatabaseClient } from "@automation/storage-postgres";
+import {
+  createDatabaseClient,
+  type DatabaseClient,
+  type DatabaseTransaction
+} from "@automation/storage-postgres";
 
 const PROVIDER_KEY = "instagram.meta.official";
 const DEFAULT_BATCH_SIZE = 10;
@@ -384,7 +388,7 @@ async function persistCanonicalEvent(
 }
 
 async function recordWebhookEvidence(
-  tx: Parameters<Parameters<DatabaseClient["begin"]>[0]>[0],
+  tx: DatabaseTransaction,
   connection: ResolvedConnection,
   occurredAt: string
 ): Promise<void> {
