@@ -30,12 +30,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
       - name: Enable Corepack
         run: corepack enable
       - name: Prepare pnpm
         run: corepack prepare pnpm@9.15.4 --activate
-      - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile
+      - name: Install dependencies from committed lockfile
+        run: pnpm install --frozen-lockfile
       - name: Prepare Supabase database stubs
         run: |
           psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
