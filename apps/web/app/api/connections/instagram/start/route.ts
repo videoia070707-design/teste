@@ -18,7 +18,7 @@ export async function GET(): Promise<Response> {
       return NextResponse.json({ error: "forbidden" }, { status: 403 });
     }
 
-    const config = getInstagramServerConfig();
+    const config = await getInstagramServerConfig();
     const state = randomBytes(32).toString("base64url");
     const sessions = new PostgresOAuthSessionStore(getDatabase());
 
