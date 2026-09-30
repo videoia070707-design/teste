@@ -14,6 +14,7 @@
     "@automation/providers": "workspace:*",
     "@automation/provider-instagram-official": "workspace:*",
     "@automation/reliability": "workspace:*",
+    "@automation/secrets": "workspace:*",
     "@automation/storage-postgres": "workspace:*",
     "@supabase/ssr": "0.12.7",
     "@supabase/supabase-js": "2.117.2",
