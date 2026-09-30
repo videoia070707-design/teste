@@ -23,10 +23,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t core < <(find database -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
-          test "${#core[@]}" -eq 12
-          test "${core[0]}" = '001_core.sql'
-          test "${core[11]}" = '012_foreign_key_indexes.sql'
+          expected=(
+            001_core.sql
+            002_provider_ingress.sql
+            003_secret_envelopes.sql
+            004_connection_health_and_identity.sql
+            005_oauth_sessions.sql
+            006_webhook_worker_leases.sql
+            007_outbound_worker_leases.sql
+            008_outbound_action_claims.sql
+            009_oauth_actor_binding.sql
+            010_provider_readiness_attestations.sql
+            011_worker_heartbeats.sql
+            012_foreign_key_indexes.sql
+            021_meta_compliance.sql
+          )
+          mapfile -t actual < <(find database -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
+          test "${#actual[@]}" -eq "${#expected[@]}"
+          for i in "${!expected[@]}"; do
+            test "${actual[$i]}" = "${expected[$i]}"
+          done
 
           if grep -RniE '\b(pgmq|pg_cron|pg_net)\b|vault\.' database; then
             echo 'Supabase-specific dependency leaked into portable database migrations.' >&2
@@ -46,12 +62,18 @@ jobs:
             018_supabase_runtime_security_hardening.sql
             019_edge_runtime_heartbeat_identity.sql
             020_web_least_privilege_role.sql
+            021_meta_compliance.sql
           )
           mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
           test "${#actual[@]}" -eq "${#expected[@]}"
           for i in "${!expected[@]}"; do
             test "${actual[$i]}" = "${expected[$i]}"
           done
+
+          cmp --silent database/021_meta_compliance.sql supabase/migrations/021_meta_compliance.sql || {
+            echo 'Portable migration 021 drifted between database/ and supabase/migrations/.' >&2
+            exit 1
+          }
 
       - uses: denoland/setup-deno@v2
         with:
