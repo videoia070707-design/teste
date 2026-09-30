@@ -9,7 +9,6 @@ services:
     dockerContext: .
     healthCheckPath: /api/health/ready
     maxShutdownDelaySeconds: 60
-    preDeployCommand: pnpm --filter @automation/storage-postgres migrate
     envVars:
       - key: SERVICE
         value: '@automation/web'
@@ -65,6 +64,7 @@ services:
     autoDeployTrigger: checksPass
     dockerfilePath: ./Dockerfile
     dockerContext: .
+    preDeployCommand: pnpm --filter @automation/storage-postgres migrate
     maxShutdownDelaySeconds: 60
     envVars:
       - key: SERVICE
