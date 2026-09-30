@@ -2,7 +2,8 @@ name: Render Blueprint
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - render.yaml
       - .github/workflows/render-blueprint.yml
@@ -12,9 +13,14 @@ on:
       - .github/workflows/render-blueprint.yml
 
 jobs:
-  validate-yaml:
+  validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
       - name: Parse render.yaml
-        run: ruby -e "require 'yaml'; data = YAML.safe_load_file('render.yaml', aliases: true); abort('services missing') unless data.is_a?(Hash) && data['services'].is_a?(Array) && data['services'].size == 3"
+        shell: ruby {0}
+        run: |
+          require "yaml"
+          data = YAML.safe_load_file("render.yaml", aliases: true)
+          abort "render.yaml must define exactly 3 services" unless data.is_a?(Hash) && data["services"].is_a?(Array) && data["services"].size == 3
