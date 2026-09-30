@@ -5,6 +5,7 @@ import { getPlatformSecrets } from "@/lib/server/platform-secrets";
 
 const PROVIDER_KEY = "instagram.meta.official";
 const EDGE_WEBHOOK_PATH = "/functions/v1/instagram-webhook";
+const EDGE_DATA_DELETION_PATH = "/functions/v1/instagram-data-deletion";
 
 export type ReadinessState = "READY" | "BLOCKED" | "EXTERNAL";
 
@@ -22,6 +23,7 @@ export interface InstagramReadinessReport {
     appOrigin: string | null;
     oauthRedirect: string | null;
     webhookCallback: string | null;
+    dataDeletionCallback: string | null;
     privacyPolicy: string | null;
     dataDeletion: string | null;
   };
@@ -38,7 +40,7 @@ const EXTERNAL_CHECKS = [
   ["required_permissions_available", "Permissões necessárias disponíveis no app"],
   ["webhook_subscriptions_configured", "Assinaturas de webhook configuradas no App Dashboard"],
   ["privacy_url_registered", "Privacy Policy URL registrada na Meta"],
-  ["data_deletion_url_registered", "Data deletion URL registrada na Meta"]
+  ["data_deletion_url_registered", "Data deletion callback/instructions configurados na Meta"]
 ] as const;
 
 export async function buildInstagramReadinessReport(
@@ -53,13 +55,14 @@ export async function buildInstagramReadinessReport(
     appOrigin: origin,
     oauthRedirect: origin ? `${origin}/api/connections/instagram/callback` : null,
     webhookCallback: supabaseOrigin ? `${supabaseOrigin}${EDGE_WEBHOOK_PATH}` : null,
+    dataDeletionCallback: supabaseOrigin ? `${supabaseOrigin}${EDGE_DATA_DELETION_PATH}` : null,
     privacyPolicy: origin ? `${origin}/legal/privacy` : null,
     dataDeletion: origin ? `${origin}/legal/data-deletion` : null
   };
 
   const configuration: ReadinessCheck[] = [
     envCheck("app_origin", "APP_ORIGIN", validPublicOrigin(process.env.APP_ORIGIN), "Origem canônica do dashboard e callback OAuth."),
-    envCheck("supabase_url", "NEXT_PUBLIC_SUPABASE_URL", validHttpsUrl(process.env.NEXT_PUBLIC_SUPABASE_URL), "Origem do Supabase Auth e do webhook Edge sempre disponível."),
+    envCheck("supabase_url", "NEXT_PUBLIC_SUPABASE_URL", validHttpsUrl(process.env.NEXT_PUBLIC_SUPABASE_URL), "Origem do Supabase Auth e dos callbacks Edge sempre disponíveis."),
     envCheck("supabase_key", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", present(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY), "Publishable key usada somente com Auth/RLS apropriados."),
     envCheck("database", "DATABASE_URL", present(process.env.DATABASE_URL), "PostgreSQL server-only do web app."),
     envCheck(
