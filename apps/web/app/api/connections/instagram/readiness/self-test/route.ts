@@ -28,7 +28,11 @@ export async function POST(request: Request): Promise<Response> {
       )
     : false;
 
-  const preflightReady = report.configurationReady && challengeReady;
+  const dataDeletionGuardReady = report.urls.dataDeletionCallback
+    ? await verifyDataDeletionRejectsUnsignedRequest(report.urls.dataDeletionCallback)
+    : false;
+
+  const preflightReady = report.configurationReady && challengeReady && dataDeletionGuardReady;
   const correlationId = randomUUID();
 
   await sql`
@@ -50,9 +54,12 @@ export async function POST(request: Request): Promise<Response> {
       ${sql.json({
         configurationReady: report.configurationReady,
         webhookChallengeReady: challengeReady,
+        dataDeletionGuardReady,
         webhookTarget: report.urls.webhookCallback ? "supabase-edge" : "unavailable",
+        dataDeletionTarget: report.urls.dataDeletionCallback ? "supabase-edge" : "unavailable",
         hostPassAtRun: report.hostPass,
-        hostPassEvidenceMutated: false
+        hostPassEvidenceMutated: false,
+        dataDeletionMutated: false
       })}
     )
   `;
@@ -89,4 +96,32 @@ async function verifyPublicEdgeChallenge(
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function verifyDataDeletionRejectsUnsignedRequest(callbackUrl: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    const response = await fetch(callbackUrl, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "",
+      redirect: "error",
+      cache: "no-store",
+      signal: controller.signal
+    });
+    if (response.status !== 400) return false;
+
+    const body = await response.json() as unknown;
+    return isRecord(body) && body.error === "signed_request_required";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
