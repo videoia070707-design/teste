@@ -53,6 +53,8 @@ export interface InstagramOAuthConfig {
   clientId: string;
   clientSecret: string;
   redirectUri: string;
+  /** Instagram auth products have changed transport details over time. */
+  tokenRequestEncoding: "multipart" | "urlencoded";
 }
 
 interface MetaErrorBody {
@@ -286,7 +288,10 @@ export class InstagramOfficialProvider implements ChannelProvider {
   }
 }
 
-export function buildInstagramAuthorizationUrl(config: Omit<InstagramOAuthConfig, "clientSecret" | "tokenEndpoint">, state: string): URL {
+export function buildInstagramAuthorizationUrl(
+  config: Pick<InstagramOAuthConfig, "authorizationEndpoint" | "clientId" | "redirectUri">,
+  state: string
+): URL {
   if (!state.trim()) throw new Error("OAuth state is required.");
 
   const url = new URL(config.authorizationEndpoint);
@@ -305,17 +310,29 @@ export async function exchangeInstagramAuthorizationCode(
 ): Promise<Record<string, unknown>> {
   if (!code.trim()) throw new Error("Authorization code is required.");
 
-  const body = new URLSearchParams({
+  const fields = {
     client_id: config.clientId,
     client_secret: config.clientSecret,
     grant_type: "authorization_code",
     redirect_uri: config.redirectUri,
     code
-  });
+  };
+
+  let body: BodyInit;
+  const headers: Record<string, string> = { accept: "application/json" };
+
+  if (config.tokenRequestEncoding === "multipart") {
+    const form = new FormData();
+    for (const [key, value] of Object.entries(fields)) form.set(key, value);
+    body = form;
+  } else {
+    body = new URLSearchParams(fields);
+    headers["content-type"] = "application/x-www-form-urlencoded";
+  }
 
   const response = await fetchImpl(config.tokenEndpoint, {
     method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    headers,
     body
   });
 
