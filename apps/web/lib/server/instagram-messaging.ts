@@ -8,6 +8,7 @@ const PROVIDER_KEY = "instagram.meta.official";
 export type QueueInstagramReplyResult =
   | { kind: "queued"; message: StoredOutboundMessage }
   | { kind: "duplicate"; message: StoredOutboundMessage }
+  | { kind: "idempotency_mismatch"; message: StoredOutboundMessage }
   | { kind: "connection_not_found" }
   | { kind: "connection_auth_invalid"; healthState: string }
   | { kind: "recipient_not_observed" };
@@ -72,6 +73,10 @@ export async function queueInstagramTextReply(input: {
       text: input.text
     }
   });
+
+  if (creation.conflictKind === "idempotency_mismatch") {
+    return { kind: "idempotency_mismatch", message: creation.message };
+  }
 
   if (creation.created) {
     await input.sql`
