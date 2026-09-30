@@ -29,7 +29,7 @@ class ServerInstagramCredentialResolver implements InstagramCredentialResolver {
 
     if (!connection?.auth_valid || !connection.external_account_id) return null;
 
-    const vault = getProviderSecretVault();
+    const vault = await getProviderSecretVault();
     const reference = await vault.getConnectionReference(connectionId);
     if (!reference) return null;
 
