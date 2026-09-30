@@ -1,3 +1,4 @@
+import { can, type WorkspaceRole } from "@automation/core";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
 
@@ -6,6 +7,7 @@ export const dynamic = "force-dynamic";
 export default async function ReliabilityPage() {
   const { membership } = await requireWorkspaceContext();
   const sql = getDatabase();
+  const canResolve = can(membership.role as WorkspaceRole, "reliability.resolve");
 
   const [metrics] = await sql<{
     unknown_sends: number;
@@ -136,15 +138,44 @@ export default async function ReliabilityPage() {
             <div><div className="eyebrow">Reconciliation queue</div><h2>Ambiguous outbound outcomes</h2></div>
             <p>sem retry automático</p>
           </div>
-          <div className="table">
-            <div className="table-row header"><span>Message</span><span>Correlation</span><span>State</span><span>Evidence</span></div>
+          <div className="grid two">
             {unknownMessages.map((message) => (
-              <div className="table-row" key={message.id}>
-                <span className="mono">{shortId(message.id)}</span>
-                <span className="mono">{shortId(message.correlation_id)}</span>
-                <span className="warn">SEND_RESULT_UNKNOWN</span>
-                <span className="muted">{message.last_error_code ?? "provider outcome requires evidence"}</span>
-              </div>
+              <article className="card" key={message.id}>
+                <div className="eyebrow mono">{shortId(message.id)}</div>
+                <h2>SEND_RESULT_UNKNOWN</h2>
+                <p className="muted">Correlation {shortId(message.correlation_id)}</p>
+                <div className="notice warning">{message.last_error_code ?? "Provider outcome requires external evidence."}</div>
+
+                {canResolve ? (
+                  <form className="reconciliation-form" action={`/api/reliability/messages/${message.id}/resolve`} method="post">
+                    <label className="field-label" htmlFor={`evidence-${message.id}`}>Evidence note</label>
+                    <textarea
+                      id={`evidence-${message.id}`}
+                      className="field-control"
+                      name="evidenceNote"
+                      minLength={12}
+                      maxLength={1000}
+                      required
+                      placeholder="Ex.: confirmado no Instagram Inbox às 14:32; mensagem aparece entregue ao contato."
+                    />
+                    <label className="field-label" htmlFor={`provider-id-${message.id}`}>Provider message ID (optional)</label>
+                    <input
+                      id={`provider-id-${message.id}`}
+                      className="field-control"
+                      type="text"
+                      name="providerMessageId"
+                      maxLength={300}
+                      placeholder="Cole somente quando houver evidência do ID"
+                    />
+                    <div className="connection-actions">
+                      <button className="button primary" type="submit" name="action" value="CONFIRM_SENT">Confirmar enviado</button>
+                      <button className="button danger" type="submit" name="action" value="CONFIRM_FAILED">Confirmar falha</button>
+                    </div>
+                  </form>
+                ) : (
+                  <p className="muted">Somente owner, admin ou supervisor pode resolver estados ambíguos.</p>
+                )}
+              </article>
             ))}
           </div>
         </section>
