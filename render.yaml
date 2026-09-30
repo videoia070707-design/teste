@@ -4,6 +4,7 @@ services:
     runtime: docker
     region: virginia
     plan: free
+    autoDeployTrigger: checksPass
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /api/health/ready
@@ -22,7 +23,7 @@ services:
       - key: NEXT_PUBLIC_SUPABASE_URL
         value: https://cqtrigqlktekczbbsxiy.supabase.co
       - key: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-        sync: false
+        value: sb_publishable_YvoQENFFqgNkiH2xZxBB5Q_vb0kNyS_
       - key: DATABASE_URL
         sync: false
       - key: PROVIDER_SECRET_CURRENT_KEY_VERSION
@@ -61,6 +62,7 @@ services:
     runtime: docker
     region: virginia
     plan: 0.5c-512mb
+    autoDeployTrigger: checksPass
     dockerfilePath: ./Dockerfile
     dockerContext: .
     maxShutdownDelaySeconds: 60
@@ -68,7 +70,10 @@ services:
       - key: SERVICE
         value: '@automation/worker-ingress'
       - key: DATABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: automation-web
+          envVarKey: DATABASE_URL
       - key: INGRESS_WORKER_BATCH_SIZE
         value: '10'
       - key: INGRESS_WORKER_POLL_MS
@@ -81,6 +86,7 @@ services:
     runtime: docker
     region: virginia
     plan: 0.5c-512mb
+    autoDeployTrigger: checksPass
     dockerfilePath: ./Dockerfile
     dockerContext: .
     maxShutdownDelaySeconds: 90
@@ -88,15 +94,24 @@ services:
       - key: SERVICE
         value: '@automation/worker-outbound'
       - key: DATABASE_URL
-        sync: false
+        fromService:
+          type: web
+          name: automation-web
+          envVarKey: DATABASE_URL
       - key: PROVIDER_SECRET_CURRENT_KEY_VERSION
         value: v1
       - key: PROVIDER_SECRET_KEYS_JSON
-        sync: false
+        fromService:
+          type: web
+          name: automation-web
+          envVarKey: PROVIDER_SECRET_KEYS_JSON
       - key: INSTAGRAM_GRAPH_BASE_URL
         value: https://graph.instagram.com/
       - key: INSTAGRAM_GRAPH_API_VERSION
-        sync: false
+        fromService:
+          type: web
+          name: automation-web
+          envVarKey: INSTAGRAM_GRAPH_API_VERSION
       - key: OUTBOUND_WORKER_BATCH_SIZE
         value: '10'
       - key: OUTBOUND_WORKER_POLL_MS
