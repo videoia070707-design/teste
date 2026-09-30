@@ -42,7 +42,7 @@ export default async function ConnectionsPage() {
             <span className="capability on">messages</span>
             <span className="capability on">comments</span>
             <span className="capability on">stories</span>
-            <span className="capability on">publishing</span>
+            <span className="capability beta">publishing later</span>
           </div>
           <div>
             <div className="key-value"><span>Authentication</span><strong>{instagram ? authLabel(instagram) : "Not connected"}</strong></div>
