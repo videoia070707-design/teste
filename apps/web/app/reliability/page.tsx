@@ -8,7 +8,6 @@ type WorkerService = "worker-ingress" | "worker-outbound";
 
 interface WorkerHeartbeatRow {
   service: WorkerService;
-  worker_id: string;
   started_at: string;
   last_seen_at: string;
   stopped_at: string | null;
@@ -87,10 +86,12 @@ export default async function ReliabilityPage() {
     limit 8
   `;
 
+  // Worker registry is global operational state, not tenant data. Deliberately
+  // select no worker_id/metadata/hostname so tenant-facing UI only receives an
+  // aggregate service health signal.
   const workerHeartbeats = await sql<WorkerHeartbeatRow[]>`
     select
       service,
-      worker_id,
       started_at,
       last_seen_at,
       stopped_at,
@@ -266,23 +267,21 @@ function WorkerCard({
           <div className="eyebrow">{label}</div>
           <h2>{state.status}</h2>
         </div>
-        <span className={`badge ${badgeClass}`}>{state.instances} instance{state.instances === 1 ? "" : "s"}</span>
+        <span className={`badge ${badgeClass}`}>{state.instances} active instance{state.instances === 1 ? "" : "s"}</span>
       </div>
-      <div className="key-value"><span>Worker ID</span><strong className="mono">{state.workerId ? shortId(state.workerId) : "—"}</strong></div>
-      <div className="key-value"><span>Last seen</span><strong>{state.lastSeenAt ? formatDate(state.lastSeenAt) : "never"}</strong></div>
+      <div className="key-value"><span>Last signal</span><strong>{state.lastSeenAt ? formatDate(state.lastSeenAt) : "never"}</strong></div>
     </article>
   );
 }
 
 function summarizeWorker(rows: WorkerHeartbeatRow[], service: WorkerService) {
   const matches = rows.filter((row) => row.service === service);
-  const running = matches.find((row) => row.fresh && row.stopped_at === null);
-  const latest = running ?? matches[0] ?? null;
+  const running = matches.filter((row) => row.fresh && row.stopped_at === null);
+  const latest = running[0] ?? matches[0] ?? null;
 
   return {
-    status: running ? "RUNNING" as const : latest?.stopped_at ? "STOPPED" as const : latest ? "STALE" as const : "NOT_SEEN" as const,
-    instances: matches.filter((row) => row.fresh && row.stopped_at === null).length,
-    workerId: latest?.worker_id ?? null,
+    status: running.length > 0 ? "RUNNING" as const : latest?.stopped_at ? "STOPPED" as const : latest ? "STALE" as const : "NOT_SEEN" as const,
+    instances: running.length,
     lastSeenAt: latest?.last_seen_at ?? null
   };
 }
