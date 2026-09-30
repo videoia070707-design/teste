@@ -38,7 +38,8 @@ O CI aplica **todos** os arquivos `database/[0-9][0-9][0-9]_*.sql` em PostgreSQL
 Arquivos específicos do Supabase:
 
 - `supabase/migrations/013–020` — runtime Free, Vault, pg_net/pg_cron, heartbeat e role web least-privilege;
-- `supabase/migrations/021_meta_compliance.sql` — espelho idempotente da migration portátil 021 para manter o projeto hospedado alinhado ao mesmo schema de produto.
+- `supabase/migrations/021_meta_compliance.sql` — espelho idempotente da migration portátil 021 para manter o projeto hospedado alinhado ao mesmo schema de produto;
+- `supabase/migrations/022_meta_webhook_verify_token.sql` — gera um verify token aleatório diretamente no Vault, sem secret manager pago ou placeholder no repositório.
 
 O adapter 013–020 contém:
 
@@ -55,14 +56,14 @@ O adapter 013–020 contém:
 
 O projeto Supabase real usa o histórico nativo de migrations. O ledger `app_private.schema_migrations` é exclusivo do runner portátil e **não deve ser criado/adotado no banco Supabase atual sem um procedimento explícito de reconciliação**.
 
-A migration `meta_compliance` foi reconciliada no histórico hospedado depois de seus objetos já existirem de forma idempotente. O histórico contém duas versões nativas com esse nome; ambas descrevem o mesmo SQL idempotente. Não apagar entradas do ledger manualmente. Futuras mudanças devem receber uma nova migration e não reutilizar `meta_compliance`.
+Durante a fase de validação, a migration idempotente `meta_compliance` foi registrada três vezes no histórico nativo do projeto hospedado. Os objetos resultantes são únicos/idempotentes e os Advisors permanecem limpos. Não remover nem editar entradas antigas do histórico. Futuras alterações de compliance recebem um novo número/nome de migration; `meta_compliance` não deve ser reutilizada novamente.
 
 ## Modelo de execução
 
 Quando um webhook é persistido:
 
 1. a Meta chama `instagram-webhook` no Supabase Edge;
-2. GET de verificação usa verify token; POST valida HMAC SHA-256 sobre o raw body;
+2. GET de verificação usa somente o verify token do Vault; POST exige o App Secret e valida HMAC SHA-256 sobre o raw body;
 3. `webhook_ingress_events` recebe o envelope antes do ACK do provider;
 4. trigger envia um sinal para `instagram_ingress` (PGMQ);
 5. trigger faz wake-up assíncrono do `g3-runtime` via `pg_net`;
@@ -100,6 +101,8 @@ Fluxo:
 
 A função Edge usa `verify_jwt=false` porque a Meta não possui sessão Supabase; a autenticação é o próprio `signed_request`. Sem `meta_app_secret`, o POST responde 503/fail-closed.
 
+O workflow `Meta Compliance` prova em PostgreSQL limpo que o subject exato remove somente seus dados, que um subject inexistente produz zero side effect, que conexões não relacionadas sobrevivem e que `anon`/`authenticated` não executam a função de exclusão.
+
 ## Cron e orçamento do Free tier
 
 O job `g3-runtime-recovery` roda a cada 15 segundos. O wake-up imediato acontece apenas quando há trabalho novo.
@@ -113,8 +116,8 @@ O desenho evita processos 24/7 e permanece dentro do objetivo de desenvolvimento
 - `g3_runtime_cron_token`: token aleatório entre Postgres/pg_net e a Edge Function;
 - `provider_secret_keyring`: JSON do keyring AES-256-GCM usado nas credenciais de providers;
 - `automation_web_db_password`: senha da role PostgreSQL dedicada ao dashboard;
+- `meta_webhook_verify_token`: verify token aleatório gerado dentro do próprio projeto pela migration 022;
 - `meta_app_secret`: App Secret real da Meta, compartilhado pelo OAuth web, webhook HMAC e data deletion signed request;
-- `meta_webhook_verify_token`: token forte do challenge do webhook;
 - `meta_webhook_signature_header`: opcional; default funcional é `x-hub-signature-256`.
 
 O runtime token plaintext não fica em tabelas de produto. `app_private.runtime_invocation_tokens` guarda somente SHA-256 para validação.
@@ -133,7 +136,7 @@ Ainda externo/obrigatório antes do HOST PASS:
 
 - `meta_app_secret` real do App Meta.
 
-Nunca criar placeholder para `meta_app_secret`; webhook e data deletion devem permanecer fail-closed até o segredo real ser configurado.
+Nunca criar placeholder para `meta_app_secret`; POST do webhook e data deletion devem permanecer fail-closed até o segredo real ser configurado.
 
 ### Variáveis externas ainda necessárias no web
 
@@ -169,7 +172,7 @@ Migration 020 cria `automation_web` com:
 
 Em deploy público, `apps/web/lib/server/database.ts` também recusa `DATABASE_URL` administrativa, exige TLS e limita o pool de conexões. `/api/health/ready` faz uma segunda verificação da identidade real da sessão antes de declarar o web pronto.
 
-Para Render, use o **Supavisor Session Pooler** em `5432`, porque o endpoint direto do Supabase é IPv6 e o Render usa IPv4. A URL deve usar o usuário `automation_web.<project-ref>`, a senha de `automation_web_db_password` e `sslmode=require`. O hostname `aws-[INDEX]-<region>.pooler.supabase.com` deve ser copiado do **Connect** do projeto; o índice não deve ser adivinhado. O valor final permanece somente como secret `DATABASE_URL` do serviço web.
+Para um host IPv4, use o **Shared Supavisor Session Pooler** em `5432`. A URL usa o usuário `automation_web.<project-ref>`, a senha do secret `automation_web_db_password` e `sslmode=require` (ou verificação mais forte quando disponível). O hostname exato `aws-[INDEX]-<region>.pooler.supabase.com` deve ser copiado do painel **Connect** do projeto; o índice nunca deve ser adivinhado. O valor final permanece somente como secret `DATABASE_URL` do serviço web.
 
 ## Web
 
@@ -197,7 +200,7 @@ Fontes versionadas:
 
 `g3-runtime` usa `SUPABASE_DB_URL` fornecida pelo ambiente Supabase. A rota é protegida por token interno próprio (`x-runtime-token`) validado server-side.
 
-`instagram-webhook` é público para a Meta (`verify_jwt=false`), mas implementa sua própria autenticação: challenge token no GET e HMAC SHA-256 do raw body no POST. Na ausência dos secrets Meta, deve responder 503/fail-closed.
+`instagram-webhook` é público para a Meta (`verify_jwt=false`), mas implementa sua própria autenticação: challenge token no GET e HMAC SHA-256 do raw body no POST. O GET pode ser validado antes do App Secret existir; o POST permanece 503/fail-closed enquanto `meta_app_secret` não estiver no Vault.
 
 `instagram-data-deletion` também é público para a Meta (`verify_jwt=false`) e valida o `signed_request` antes de qualquer exclusão. Na ausência do App Secret real, deve responder 503/fail-closed.
 
