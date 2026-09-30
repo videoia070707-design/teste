@@ -1,8 +1,9 @@
-import postgres from "postgres";
+import postgres, { type TransactionSql } from "postgres";
 
 export * from "./oauth";
 
 export type DatabaseClient = ReturnType<typeof postgres>;
+export type DatabaseTransaction = TransactionSql<{}>;
 
 export interface WebhookIngressInput {
   provider: string;
@@ -68,8 +69,6 @@ export class PostgresWorkspaceStore {
 
   async ensureDefaultWorkspace(userId: string): Promise<WorkspaceMembershipRecord> {
     return this.sql.begin(async (tx) => {
-      // Multiple server components can render concurrently on first login.
-      // Serialize bootstrap by verified Supabase user id to avoid two default workspaces.
       await tx`select pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
 
       const [existing] = await tx<{
