@@ -54,7 +54,7 @@ export class PostgresMessageStore {
         ${input.correlationId},
         'outbound',
         'text',
-        'CREATED',
+        'QUEUED',
         false,
         ${this.sql.json(asJsonValue(input.payload))}
       )
