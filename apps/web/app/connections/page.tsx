@@ -53,6 +53,12 @@ export default async function ConnectionsPage() {
             <a className="button primary" href="/api/connections/instagram/start">
               {instagram ? "Reautorizar Instagram" : "Conectar Instagram"}
             </a>
+            {instagram && (
+              <form action="/api/connections/instagram/health" method="post">
+                <input type="hidden" name="connectionId" value={instagram.id} />
+                <button className="button" type="submit">Verificar conexão</button>
+              </form>
+            )}
           </div>
         </article>
 
