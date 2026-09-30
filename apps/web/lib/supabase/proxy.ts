@@ -6,9 +6,10 @@ const CACHE_HEADERS = ["cache-control", "expires", "pragma"] as const;
 export async function updateSession(request: NextRequest): Promise<NextResponse> {
   const pathname = request.nextUrl.pathname;
 
-  // Meta must be able to deliver webhooks without an end-user Supabase session.
-  // Signature verification + durable ingress protect this endpoint instead.
-  if (pathname === "/api/providers/instagram/webhook") {
+  // Provider webhooks and legal/App Review endpoints must be reachable without
+  // an end-user Supabase session. Webhooks are protected by provider signature;
+  // legal routes contain no workspace data.
+  if (pathname === "/api/providers/instagram/webhook" || pathname.startsWith("/legal/")) {
     return NextResponse.next({ request });
   }
 
