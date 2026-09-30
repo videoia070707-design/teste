@@ -5,6 +5,10 @@ export * from "./oauth";
 export type DatabaseClient = ReturnType<typeof postgres>;
 export type DatabaseTransaction = TransactionSql<{}>;
 
+export interface DatabaseClientOptions {
+  maxConnections?: number;
+}
+
 export interface WebhookIngressInput {
   provider: string;
   signatureValid: boolean;
@@ -31,10 +35,19 @@ export interface WorkspaceMembershipRecord {
   role: "owner" | "admin" | "automation_manager" | "supervisor" | "agent" | "analyst" | "viewer";
 }
 
-export function createDatabaseClient(connectionString: string): DatabaseClient {
+export function createDatabaseClient(
+  connectionString: string,
+  options: DatabaseClientOptions = {}
+): DatabaseClient {
   if (!connectionString.trim()) throw new Error("DATABASE_URL is required.");
+
+  const maxConnections = options.maxConnections ?? 10;
+  if (!Number.isInteger(maxConnections) || maxConnections < 1 || maxConnections > 20) {
+    throw new Error("Database maxConnections must be an integer between 1 and 20.");
+  }
+
   return postgres(connectionString, {
-    max: 10,
+    max: maxConnections,
     idle_timeout: 20,
     connect_timeout: 10,
     prepare: false
