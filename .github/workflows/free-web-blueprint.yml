@@ -48,7 +48,13 @@ jobs:
 
           required = %w[
             SERVICE APP_ORIGIN NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-            DATABASE_URL META_APP_ID
+            DATABASE_URL DATABASE_POOL_MAX META_APP_ID
           ]
           missing = required - keys
           abort "required web env declarations missing: #{missing.inspect}" unless missing.empty?
+
+          database_url = envs.find { |entry| entry["key"] == "DATABASE_URL" }
+          abort "DATABASE_URL must remain an operator-supplied secret" unless database_url && database_url["sync"] == false
+
+          database_pool = envs.find { |entry| entry["key"] == "DATABASE_POOL_MAX" }
+          abort "free web database pool must remain capped at 3" unless database_pool && database_pool["value"].to_s == "3"
