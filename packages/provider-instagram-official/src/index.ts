@@ -10,6 +10,8 @@ import {
   type SendTextInput
 } from "@automation/providers";
 
+export * from "./webhooks";
+
 export const INSTAGRAM_LOGIN_SCOPES = [
   "instagram_business_basic",
   "instagram_business_manage_messages",
