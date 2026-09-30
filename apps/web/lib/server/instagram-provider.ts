@@ -6,7 +6,7 @@ import {
   type InstagramCredentials
 } from "@automation/provider-instagram-official";
 import { getDatabase } from "@/lib/server/database";
-import { getInstagramServerConfig } from "@/lib/server/instagram";
+import { getInstagramApiConfig } from "@/lib/server/instagram";
 import { getProviderSecretVault } from "@/lib/server/secrets";
 
 const SECRET_PURPOSE = "instagram.credentials";
@@ -67,7 +67,7 @@ let provider: InstagramOfficialProvider | undefined;
 export function getInstagramOfficialProvider(): InstagramOfficialProvider {
   if (provider) return provider;
 
-  const config = getInstagramServerConfig();
+  const config = getInstagramApiConfig();
   provider = new InstagramOfficialProvider(
     {
       graphBaseUrl: config.graphBaseUrl,
