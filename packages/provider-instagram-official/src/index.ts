@@ -15,7 +15,10 @@ export * from "./webhooks";
 export const INSTAGRAM_LOGIN_SCOPES = [
   "instagram_business_basic",
   "instagram_business_manage_messages",
-  "instagram_business_manage_comments",
+  "instagram_business_manage_comments"
+] as const;
+
+export const INSTAGRAM_OPTIONAL_SCOPES = [
   "instagram_business_content_publish"
 ] as const;
 
@@ -25,7 +28,11 @@ const CAPABILITIES: readonly CapabilityDescriptor[] = [
   { key: "comments.receive", state: "available" },
   { key: "comments.reply", state: "available" },
   { key: "stories.reply", state: "available" },
-  { key: "content.publish", state: "available" }
+  {
+    key: "content.publish",
+    state: "unavailable",
+    reason: "Content publishing is not implemented in G3, so its OAuth permission is not requested yet."
+  }
 ];
 
 export interface InstagramCredentials {
