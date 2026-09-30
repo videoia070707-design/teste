@@ -1,8 +1,7 @@
-import { randomUUID } from "node:crypto";
 import { can, type WorkspaceRole } from "@automation/core";
-import { PostgresMessageStore } from "@automation/storage-postgres/messages";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
+import { queueInstagramTextReply } from "@/lib/server/instagram-messaging";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,70 +27,36 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  const database = getDatabase();
-  const [connection] = await database<{
-    id: string;
-    auth_valid: boolean;
-    health_state: string;
-  }[]>`
-    select id, auth_valid, health_state
-    from app_private.channel_connections
-    where id = ${input.connectionId}
-      and workspace_id = ${membership.workspaceId}
-      and channel = 'instagram'
-      and provider_key = 'instagram.meta.official'
-      and provider_mode = 'official'
-    limit 1
-  `;
-
-  if (!connection) return Response.json({ error: "connection_not_found" }, { status: 404 });
-  if (!connection.auth_valid) {
-    return Response.json({ error: "connection_auth_invalid", healthState: connection.health_state }, { status: 409 });
-  }
-
-  const correlationId = randomUUID();
-  const store = new PostgresMessageStore(database);
-  const creation = await store.createOutbound({
+  const result = await queueInstagramTextReply({
+    sql: getDatabase(),
     workspaceId: membership.workspaceId,
-    connectionId: connection.id,
-    idempotencyKey,
-    correlationId,
-    payload: {
-      channel: "instagram",
-      recipientExternalId: input.recipientExternalId,
-      text: input.text
-    }
+    actorUserId: userId,
+    connectionId: input.connectionId,
+    recipientExternalId: input.recipientExternalId,
+    text: input.text,
+    idempotencyKey
   });
 
-  if (creation.created) {
-    await database`
-      insert into app_private.audit_logs (
-        workspace_id,
-        actor_user_id,
-        action,
-        resource_type,
-        resource_id,
-        correlation_id,
-        metadata
-      ) values (
-        ${membership.workspaceId},
-        ${userId},
-        'instagram.message.queued',
-        'message',
-        ${creation.message.id},
-        ${creation.message.correlationId},
-        ${database.json({ provider: "instagram.meta.official", mode: "official" })}
-      )
-    `;
+  if (result.kind === "connection_not_found") {
+    return Response.json({ error: "connection_not_found" }, { status: 404 });
+  }
+  if (result.kind === "connection_auth_invalid") {
+    return Response.json({ error: "connection_auth_invalid", healthState: result.healthState }, { status: 409 });
+  }
+  if (result.kind === "recipient_not_observed") {
+    return Response.json(
+      { error: "recipient_not_observed_by_verified_inbound_message" },
+      { status: 409 }
+    );
   }
 
   return Response.json(
     {
-      duplicateRequest: !creation.created,
-      queued: creation.created,
-      message: presentMessage(creation.message)
+      duplicateRequest: result.kind === "duplicate",
+      queued: result.kind === "queued",
+      message: presentMessage(result.message)
     },
-    { status: creation.created ? 202 : 200 }
+    { status: result.kind === "queued" ? 202 : 200 }
   );
 }
 
