@@ -7,6 +7,7 @@ export interface StoredConnectionRecord {
   providerKey: string;
   providerMode: "official" | "experimental" | "browser_lab";
   externalAccountId: string | null;
+  providerSubjectId: string | null;
   displayName: string | null;
   healthState: "HEALTHY" | "DEGRADED_PARTIAL" | "STALE" | "AUTH_EXPIRED" | "DISCONNECTED";
   authValid: boolean;
@@ -22,6 +23,7 @@ export class PostgresConnectionStore {
     providerKey: string;
     providerMode: "official" | "experimental" | "browser_lab";
     externalAccountId: string;
+    providerSubjectId?: string;
     displayName?: string;
   }): Promise<StoredConnectionRecord> {
     const [row] = await this.sql<{
@@ -31,6 +33,7 @@ export class PostgresConnectionStore {
       provider_key: string;
       provider_mode: StoredConnectionRecord["providerMode"];
       external_account_id: string | null;
+      provider_subject_id: string | null;
       display_name: string | null;
       health_state: StoredConnectionRecord["healthState"];
       auth_valid: boolean;
@@ -42,6 +45,7 @@ export class PostgresConnectionStore {
         provider_key,
         provider_mode,
         external_account_id,
+        provider_subject_id,
         display_name,
         health_state,
         auth_valid,
@@ -54,6 +58,7 @@ export class PostgresConnectionStore {
         ${input.providerKey},
         ${input.providerMode},
         ${input.externalAccountId},
+        ${input.providerSubjectId ?? null},
         ${input.displayName ?? null},
         'AUTH_EXPIRED',
         false,
@@ -66,6 +71,7 @@ export class PostgresConnectionStore {
       do update set
         channel = excluded.channel,
         provider_mode = excluded.provider_mode,
+        provider_subject_id = coalesce(excluded.provider_subject_id, app_private.channel_connections.provider_subject_id),
         display_name = coalesce(excluded.display_name, app_private.channel_connections.display_name),
         health_state = 'AUTH_EXPIRED',
         auth_valid = false,
@@ -79,6 +85,7 @@ export class PostgresConnectionStore {
         provider_key,
         provider_mode,
         external_account_id,
+        provider_subject_id,
         display_name,
         health_state,
         auth_valid,
@@ -97,6 +104,7 @@ export class PostgresConnectionStore {
       provider_key: string;
       provider_mode: StoredConnectionRecord["providerMode"];
       external_account_id: string | null;
+      provider_subject_id: string | null;
       display_name: string | null;
       health_state: StoredConnectionRecord["healthState"];
       auth_valid: boolean;
@@ -117,6 +125,7 @@ export class PostgresConnectionStore {
         provider_key,
         provider_mode,
         external_account_id,
+        provider_subject_id,
         display_name,
         health_state,
         auth_valid,
@@ -146,6 +155,7 @@ export class PostgresConnectionStore {
       provider_key: string;
       provider_mode: StoredConnectionRecord["providerMode"];
       external_account_id: string | null;
+      provider_subject_id: string | null;
       display_name: string | null;
       health_state: StoredConnectionRecord["healthState"];
       auth_valid: boolean;
@@ -158,6 +168,7 @@ export class PostgresConnectionStore {
         provider_key,
         provider_mode,
         external_account_id,
+        provider_subject_id,
         display_name,
         health_state,
         auth_valid,
@@ -178,6 +189,7 @@ function mapConnection(row: {
   provider_key: string;
   provider_mode: StoredConnectionRecord["providerMode"];
   external_account_id: string | null;
+  provider_subject_id: string | null;
   display_name: string | null;
   health_state: StoredConnectionRecord["healthState"];
   auth_valid: boolean;
@@ -190,6 +202,7 @@ function mapConnection(row: {
     providerKey: row.provider_key,
     providerMode: row.provider_mode,
     externalAccountId: row.external_account_id,
+    providerSubjectId: row.provider_subject_id,
     displayName: row.display_name,
     healthState: row.health_state,
     authValid: row.auth_valid,
