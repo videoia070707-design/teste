@@ -2,6 +2,7 @@ import "server-only";
 import { AesGcmSecretCipher, StaticSecretKeyring } from "@automation/secrets";
 import { PostgresEncryptedSecretVault } from "@automation/storage-postgres/secrets";
 import { getDatabase } from "@/lib/server/database";
+import { getPlatformSecret } from "@/lib/server/platform-secrets";
 
 interface StoredKeyring {
   currentVersion: string;
@@ -32,19 +33,12 @@ async function createProviderSecretVault(): Promise<PostgresEncryptedSecretVault
 }
 
 async function readSupabaseVaultKeyring(database: ReturnType<typeof getDatabase>): Promise<StoredKeyring> {
-  const [row] = await database<{ decrypted_secret: string }[]>`
-    select decrypted_secret
-    from vault.decrypted_secrets
-    where name = 'provider_secret_keyring'
-    order by created_at desc
-    limit 1
-  `;
-
-  if (!row) throw new Error("Provider secret keyring is not available in Supabase Vault.");
+  const raw = await getPlatformSecret("provider_secret_keyring", database);
+  if (!raw) throw new Error("Provider secret keyring is not available through the platform secret bridge.");
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(row.decrypted_secret) as unknown;
+    parsed = JSON.parse(raw) as unknown;
   } catch {
     throw new Error("Supabase Vault provider keyring is not valid JSON.");
   }
