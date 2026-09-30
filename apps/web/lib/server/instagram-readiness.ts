@@ -69,9 +69,13 @@ export async function buildInstagramReadinessReport(
       "Ambiente público exige sslmode=require, verify-ca ou verify-full. Desenvolvimento local pode usar conexão local sem TLS."
     ),
     envCheck("meta_app_id", "META_APP_ID", present(process.env.META_APP_ID), "ID do App Meta usado pelo OAuth."),
-    envCheck("meta_app_secret_web", "META_APP_SECRET (OAuth web)", present(process.env.META_APP_SECRET), "Secret do App Meta no ambiente server-only do web; nunca é renderizado."),
-    envCheck("meta_app_secret_edge", "Meta App Secret no Supabase Vault", platformSecrets.metaAppSecretReady, "Mesmo App Secret usado pelo webhook Edge para HMAC; valor nunca sai do Vault."),
-    envCheck("webhook_verify_token_edge", "Webhook verify token no Supabase Vault", platformSecrets.webhookVerifyTokenReady, "Verify token forte usado pelo challenge público do webhook Edge."),
+    envCheck(
+      "meta_app_secret",
+      "Meta App Secret",
+      present(process.env.META_APP_SECRET) || platformSecrets.metaAppSecretReady,
+      "Produção usa o Supabase Vault via bridge allowlisted; META_APP_SECRET permanece apenas como fallback local compatível."
+    ),
+    envCheck("webhook_verify_token", "Webhook verify token no Supabase Vault", platformSecrets.webhookVerifyTokenReady, "Verify token forte usado pelo challenge público do webhook Edge."),
     envCheck("oauth_authorize", "INSTAGRAM_OAUTH_AUTHORIZE_URL", validHttpsUrl(process.env.INSTAGRAM_OAUTH_AUTHORIZE_URL), "Endpoint OAuth configurável."),
     envCheck("oauth_token", "INSTAGRAM_OAUTH_TOKEN_URL", validHttpsUrl(process.env.INSTAGRAM_OAUTH_TOKEN_URL), "Endpoint de troca de authorization code."),
     envCheck("long_lived_token", "INSTAGRAM_LONG_LIVED_TOKEN_URL", validHttpsUrl(process.env.INSTAGRAM_LONG_LIVED_TOKEN_URL), "Endpoint de troca para long-lived token."),
