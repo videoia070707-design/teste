@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   lockfile:
@@ -34,13 +34,11 @@ jobs:
       - name: Generate lockfile only
         if: steps.lockfile.outputs.missing == 'true'
         run: pnpm install --lockfile-only
-      - name: Commit generated lockfile
+      - name: Upload generated lockfile
         if: steps.lockfile.outputs.missing == 'true'
-        run: |
-          test -f pnpm-lock.yaml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pnpm-lock.yaml
-          git diff --cached --quiet && exit 0
-          git commit -m "build: pin workspace dependencies with pnpm lockfile"
-          git push
+        uses: actions/upload-artifact@v4
+        with:
+          name: pnpm-lockfile-bootstrap
+          path: pnpm-lock.yaml
+          if-no-files-found: error
+          retention-days: 1
