@@ -1,0 +1,226 @@
+name: Meta Compliance
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'database/**'
+      - 'supabase/functions/instagram-data-deletion/**'
+      - '.github/workflows/meta-compliance.yml'
+  pull_request:
+    paths:
+      - 'database/**'
+      - 'supabase/functions/instagram-data-deletion/**'
+      - '.github/workflows/meta-compliance.yml'
+
+jobs:
+  deletion-isolation:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: automation_meta_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d automation_meta_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/automation_meta_ci
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare portable Supabase stubs
+        shell: bash
+        run: |
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then
+              create role anon nologin;
+            end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+              create role authenticated nologin;
+            end if;
+            if not exists (select 1 from pg_roles where rolname = 'service_role') then
+              create role service_role nologin;
+            end if;
+          end
+          $$;
+          create schema if not exists auth;
+          create table if not exists auth.users (
+            id uuid primary key,
+            email text,
+            created_at timestamptz not null default now()
+          );
+          SQL
+
+      - name: Apply portable migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for migration in database/*.sql; do
+            echo "Applying $migration"
+            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+          done
+
+      - name: Prove provider-subject deletion isolation
+        shell: bash
+        run: |
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            v_workspace_id uuid;
+            v_target_connection uuid;
+            v_other_connection uuid;
+            v_result record;
+          begin
+            insert into app_private.workspaces (name)
+            values ('Meta deletion CI workspace')
+            returning id into v_workspace_id;
+
+            insert into app_private.channel_connections (
+              workspace_id,
+              channel,
+              provider_key,
+              provider_mode,
+              external_account_id,
+              provider_subject_id,
+              auth_valid
+            ) values (
+              v_workspace_id,
+              'instagram',
+              'instagram.meta.official',
+              'official',
+              'ci-target-account',
+              'ci-target-subject',
+              true
+            ) returning id into v_target_connection;
+
+            insert into app_private.channel_connections (
+              workspace_id,
+              channel,
+              provider_key,
+              provider_mode,
+              external_account_id,
+              provider_subject_id,
+              auth_valid
+            ) values (
+              v_workspace_id,
+              'instagram',
+              'instagram.meta.official',
+              'official',
+              'ci-other-account',
+              'ci-other-subject',
+              true
+            ) returning id into v_other_connection;
+
+            insert into app_private.messages (
+              workspace_id,
+              connection_id,
+              idempotency_key,
+              correlation_id,
+              direction,
+              message_type,
+              delivery_state,
+              payload
+            ) values
+              (
+                v_workspace_id,
+                v_target_connection,
+                'meta-delete-target-message',
+                gen_random_uuid(),
+                'outbound',
+                'text',
+                'SENT',
+                '{}'::jsonb
+              ),
+              (
+                v_workspace_id,
+                v_other_connection,
+                'meta-delete-other-message',
+                gen_random_uuid(),
+                'outbound',
+                'text',
+                'SENT',
+                '{}'::jsonb
+              );
+
+            select * into v_result
+            from app_private.delete_provider_subject_data(
+              'instagram.meta.official',
+              'ci-target-subject'
+            );
+
+            if v_result.matched_connections <> 1 or v_result.deleted_connections <> 1 then
+              raise exception 'exact provider subject did not delete exactly one connection: %', row_to_json(v_result);
+            end if;
+
+            if exists (
+              select 1 from app_private.channel_connections where id = v_target_connection
+            ) then
+              raise exception 'target connection survived provider-subject deletion';
+            end if;
+
+            if exists (
+              select 1 from app_private.messages where connection_id = v_target_connection
+            ) then
+              raise exception 'target messages survived provider-subject deletion';
+            end if;
+
+            if not exists (
+              select 1 from app_private.channel_connections where id = v_other_connection
+            ) then
+              raise exception 'unrelated connection was deleted';
+            end if;
+
+            if not exists (
+              select 1 from app_private.messages where connection_id = v_other_connection
+            ) then
+              raise exception 'unrelated message was deleted';
+            end if;
+
+            select * into v_result
+            from app_private.delete_provider_subject_data(
+              'instagram.meta.official',
+              'ci-subject-does-not-exist'
+            );
+
+            if v_result.matched_connections <> 0
+              or v_result.deleted_connections <> 0
+              or v_result.deleted_ingress_events <> 0
+              or v_result.deleted_secret_envelopes <> 0
+              or v_result.deleted_outbox_events <> 0 then
+              raise exception 'unknown provider subject produced side effects: %', row_to_json(v_result);
+            end if;
+
+            if not exists (
+              select 1 from app_private.channel_connections where id = v_other_connection
+            ) then
+              raise exception 'no-match deletion modified unrelated connection';
+            end if;
+
+            if has_function_privilege(
+              'anon',
+              'app_private.delete_provider_subject_data(text,text)',
+              'EXECUTE'
+            ) then
+              raise exception 'anon can execute provider deletion function';
+            end if;
+
+            if has_function_privilege(
+              'authenticated',
+              'app_private.delete_provider_subject_data(text,text)',
+              'EXECUTE'
+            ) then
+              raise exception 'authenticated can execute provider deletion function';
+            end if;
+          end
+          $$;
+          SQL
