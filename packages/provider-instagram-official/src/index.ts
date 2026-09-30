@@ -59,6 +59,22 @@ export interface InstagramOAuthConfig {
   tokenRequestEncoding: "multipart" | "urlencoded";
 }
 
+export interface InstagramCommentReplyInput {
+  connectionId: ConnectionId;
+  commentId: string;
+  text: string;
+  idempotencyKey: string;
+  correlationId: string;
+}
+
+export interface InstagramCommentPrivateReplyInput {
+  connectionId: ConnectionId;
+  commentId: string;
+  text: string;
+  idempotencyKey: string;
+  correlationId: string;
+}
+
 interface MetaErrorBody {
   error?: {
     message?: string;
@@ -72,6 +88,10 @@ interface MetaErrorBody {
 interface InstagramSendResponse extends MetaErrorBody {
   recipient_id?: string;
   message_id?: string;
+}
+
+interface InstagramCommentReplyResponse extends MetaErrorBody {
+  id?: string;
 }
 
 export class InstagramOfficialProvider implements ChannelProvider {
@@ -191,53 +211,110 @@ export class InstagramOfficialProvider implements ChannelProvider {
 
   async sendText(input: SendTextInput): Promise<ProviderSendResult> {
     const credentials = await this.credentials.resolve(input.connectionId);
-    if (!credentials) {
-      return {
-        kind: "rejected",
-        code: "AUTH_CREDENTIALS_MISSING",
-        message: "Instagram credentials are unavailable for this connection.",
-        retryable: false
-      };
-    }
+    if (!credentials) return missingCredentials();
 
     const url = new URL(
       `${encodeURIComponent(this.config.apiVersion)}/${encodeURIComponent(credentials.igUserId)}/messages`,
       ensureTrailingSlash(this.config.graphBaseUrl)
     );
 
+    return this.postMutation({
+      url,
+      accessToken: credentials.accessToken,
+      body: {
+        recipient: { id: input.recipientExternalId },
+        message: { text: input.text }
+      },
+      operationName: "Instagram Send API",
+      extractSuccessId: (body) => isRecord(body) && typeof body.message_id === "string" ? body.message_id : undefined
+    });
+  }
+
+  async replyToComment(input: InstagramCommentReplyInput): Promise<ProviderSendResult> {
+    const credentials = await this.credentials.resolve(input.connectionId);
+    if (!credentials) return missingCredentials();
+
+    const url = new URL(
+      `${encodeURIComponent(this.config.apiVersion)}/${encodeURIComponent(input.commentId)}/replies`,
+      ensureTrailingSlash(this.config.graphBaseUrl)
+    );
+
+    return this.postMutation({
+      url,
+      accessToken: credentials.accessToken,
+      body: { message: input.text },
+      operationName: "Instagram Comment Reply API",
+      extractSuccessId: (body) => isRecord(body) && typeof body.id === "string" ? body.id : undefined
+    });
+  }
+
+  async privateReplyToComment(input: InstagramCommentPrivateReplyInput): Promise<ProviderSendResult> {
+    const credentials = await this.credentials.resolve(input.connectionId);
+    if (!credentials) return missingCredentials();
+
+    const url = new URL(
+      `${encodeURIComponent(this.config.apiVersion)}/${encodeURIComponent(credentials.igUserId)}/messages`,
+      ensureTrailingSlash(this.config.graphBaseUrl)
+    );
+
+    return this.postMutation({
+      url,
+      accessToken: credentials.accessToken,
+      body: {
+        recipient: { comment_id: input.commentId },
+        message: { text: input.text }
+      },
+      operationName: "Instagram Comment Private Reply API",
+      extractSuccessId: (body) => isRecord(body) && typeof body.message_id === "string" ? body.message_id : undefined
+    });
+  }
+
+  async reconcileSend(): Promise<ProviderSendResult> {
+    return {
+      kind: "unknown",
+      reason: "ambiguous_provider_response",
+      reconciliationHint: "No blind idempotent replay is declared for Instagram mutations. Await webhook/provider evidence or operator review."
+    };
+  }
+
+  private async postMutation(input: {
+    url: URL;
+    accessToken: string;
+    body: unknown;
+    operationName: string;
+    extractSuccessId: (body: unknown) => string | undefined;
+  }): Promise<ProviderSendResult> {
     try {
-      const response = await this.fetchWithTimeout(url, {
+      const response = await this.fetchWithTimeout(input.url, {
         method: "POST",
         headers: {
-          authorization: `Bearer ${credentials.accessToken}`,
+          authorization: `Bearer ${input.accessToken}`,
           "content-type": "application/json",
           accept: "application/json"
         },
-        body: JSON.stringify({
-          recipient: { id: input.recipientExternalId },
-          message: { text: input.text }
-        })
+        body: JSON.stringify(input.body)
       });
 
-      const body = await readJsonSafely<InstagramSendResponse>(response);
+      const body = await readJsonSafely<MetaErrorBody & Record<string, unknown>>(response);
 
       if (response.ok) {
-        if (!body?.message_id) {
+        const successId = input.extractSuccessId(body);
+        if (!successId) {
           return {
             kind: "unknown",
             reason: "ambiguous_provider_response",
-            reconciliationHint: "Instagram returned success without a message_id. Do not retry blindly."
+            reconciliationHint: `${input.operationName} returned success without a provider object/message id. Do not retry blindly.`
           };
         }
 
         return {
           kind: "accepted",
-          providerMessageId: body.message_id,
+          providerMessageId: successId,
           acceptedAt: new Date().toISOString()
         };
       }
 
-      const message = body?.error?.message ?? `Instagram Send API returned HTTP ${response.status}.`;
+      const message = body?.error?.message ?? `${input.operationName} returned HTTP ${response.status}.`;
       const code = body?.error?.code ? String(body.error.code) : `HTTP_${response.status}`;
 
       if (response.status >= 500) {
@@ -269,14 +346,6 @@ export class InstagramOfficialProvider implements ChannelProvider {
         reconciliationHint: "Transport failed after dispatch; reconcile before retrying."
       };
     }
-  }
-
-  async reconcileSend(): Promise<ProviderSendResult> {
-    return {
-      kind: "unknown",
-      reason: "ambiguous_provider_response",
-      reconciliationHint: "No blind idempotent replay is declared for Instagram Send API. Await webhook/provider evidence or operator review."
-    };
   }
 
   private async fetchWithTimeout(input: URL, init: RequestInit): Promise<Response> {
@@ -365,6 +434,15 @@ export function verifyHmacSha256Signature(rawBody: Uint8Array | string, signatur
   return constantTimeEqual(providedHex.toLowerCase(), expectedHex.toLowerCase());
 }
 
+function missingCredentials(): ProviderSendResult {
+  return {
+    kind: "rejected",
+    code: "AUTH_CREDENTIALS_MISSING",
+    message: "Instagram credentials are unavailable for this connection.",
+    retryable: false
+  };
+}
+
 function constantTimeEqual(left: string, right: string): boolean {
   const a = Buffer.from(left);
   const b = Buffer.from(right);
@@ -385,4 +463,8 @@ async function readJsonSafely<T>(response: Response): Promise<T | null> {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
