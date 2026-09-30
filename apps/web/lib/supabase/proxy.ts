@@ -6,10 +6,15 @@ const CACHE_HEADERS = ["cache-control", "expires", "pragma"] as const;
 export async function updateSession(request: NextRequest): Promise<NextResponse> {
   const pathname = request.nextUrl.pathname;
 
-  // Provider webhooks and legal/App Review endpoints must be reachable without
-  // an end-user Supabase session. Webhooks are protected by provider signature;
-  // legal routes contain no workspace data.
-  if (pathname === "/api/providers/instagram/webhook" || pathname.startsWith("/legal/")) {
+  // Provider webhooks, runtime health probes and legal/App Review endpoints
+  // must be reachable without an end-user Supabase session. Webhooks are
+  // protected by provider signature; health routes expose no workspace data;
+  // legal routes contain only deployment-level public information.
+  if (
+    pathname === "/api/providers/instagram/webhook" ||
+    pathname.startsWith("/api/health/") ||
+    pathname.startsWith("/legal/")
+  ) {
     return NextResponse.next({ request });
   }
 
