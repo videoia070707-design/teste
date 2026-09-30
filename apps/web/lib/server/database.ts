@@ -41,6 +41,13 @@ function validateProductionDatabaseUrl(connectionString: string): void {
     throw new Error("Public DATABASE_URL must use the automation_web least-privilege role.");
   }
 
+  if (sharedPooler) {
+    const effectivePort = url.port || "5432";
+    if (effectivePort !== "5432") {
+      throw new Error("Public Supavisor DATABASE_URL must use Session Pooler port 5432.");
+    }
+  }
+
   const sslMode = url.searchParams.get("sslmode")?.toLowerCase();
   if (sslMode !== "require" && sslMode !== "verify-ca" && sslMode !== "verify-full") {
     throw new Error("Public DATABASE_URL must enforce PostgreSQL TLS.");
