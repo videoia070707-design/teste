@@ -66,6 +66,92 @@ jobs:
             echo "Applying $migration"
             psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
           done
+      - name: Validate database invariants
+        run: |
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            workspace_id uuid;
+            connection_id uuid;
+          begin
+            if has_schema_privilege('anon', 'app_private', 'USAGE') then
+              raise exception 'anon must not have USAGE on app_private';
+            end if;
+            if has_schema_privilege('authenticated', 'app_private', 'USAGE') then
+              raise exception 'authenticated must not have USAGE on app_private';
+            end if;
+
+            insert into app_private.workspaces (name)
+            values ('CI invariant workspace')
+            returning id into workspace_id;
+
+            insert into app_private.channel_connections (
+              workspace_id,
+              channel,
+              provider_key,
+              provider_mode,
+              external_account_id,
+              auth_valid
+            ) values (
+              workspace_id,
+              'instagram',
+              'instagram.meta.official',
+              'official',
+              'ci-instagram-account',
+              true
+            ) returning id into connection_id;
+
+            insert into app_private.messages (
+              workspace_id,
+              connection_id,
+              idempotency_key,
+              correlation_id,
+              direction,
+              message_type,
+              dedupe_resource_key,
+              delivery_state,
+              payload
+            ) values (
+              workspace_id,
+              connection_id,
+              'ci-idem-private-1',
+              gen_random_uuid(),
+              'outbound',
+              'instagram_comment_private_reply',
+              'comment-claim-1',
+              'QUEUED',
+              '{}'::jsonb
+            );
+
+            begin
+              insert into app_private.messages (
+                workspace_id,
+                connection_id,
+                idempotency_key,
+                correlation_id,
+                direction,
+                message_type,
+                dedupe_resource_key,
+                delivery_state,
+                payload
+              ) values (
+                workspace_id,
+                connection_id,
+                'ci-idem-private-2',
+                gen_random_uuid(),
+                'outbound',
+                'instagram_comment_private_reply',
+                'comment-claim-1',
+                'QUEUED',
+                '{}'::jsonb
+              );
+              raise exception 'duplicate provider resource claim was accepted';
+            exception
+              when unique_violation then null;
+            end;
+          end
+          $$;
+          SQL
       - name: Typecheck
         run: pnpm typecheck
       - name: Test
