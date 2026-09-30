@@ -23,6 +23,8 @@ services:
         value: https://cqtrigqlktekczbbsxiy.supabase.co
       - key: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
         value: sb_publishable_YvoQENFFqgNkiH2xZxBB5Q_vb0kNyS_
+      - key: GOOGLE_AUTH_ENABLED
+        value: 'false'
       - key: DATABASE_URL
         sync: false
       - key: PROVIDER_SECRET_CURRENT_KEY_VERSION
