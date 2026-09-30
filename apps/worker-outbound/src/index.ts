@@ -6,6 +6,7 @@ import {
   type InstagramCredentialResolver,
   type InstagramCredentials
 } from "@automation/provider-instagram-official";
+import type { ProviderSendResult } from "@automation/providers";
 import { applyProviderSendResult, type MessageDeliverySnapshot } from "@automation/reliability";
 import { AesGcmSecretCipher, StaticSecretKeyring } from "@automation/secrets";
 import { createDatabaseClient, type DatabaseClient } from "@automation/storage-postgres";
@@ -18,19 +19,30 @@ const DEFAULT_BATCH_SIZE = 10;
 const DEFAULT_POLL_MS = 750;
 const DEFAULT_LEASE_SECONDS = 45;
 
+const MESSAGE_TYPE_TEXT = "text";
+const MESSAGE_TYPE_COMMENT_PUBLIC_REPLY = "instagram_comment_public_reply";
+const MESSAGE_TYPE_COMMENT_PRIVATE_REPLY = "instagram_comment_private_reply";
+
 interface ClaimedMessage {
   id: string;
   workspaceId: string;
   connectionId: string;
   idempotencyKey: string;
   correlationId: string;
+  messageType: string;
   attemptCount: number;
   payload: unknown;
 }
 
-interface OutboundPayload {
+interface TextPayload {
   channel: "instagram";
   recipientExternalId: string;
+  text: string;
+}
+
+interface CommentPayload {
+  channel: "instagram";
+  commentId: string;
   text: string;
 }
 
@@ -101,6 +113,7 @@ async function claimBatch(
     connection_id: string;
     idempotency_key: string;
     correlation_id: string;
+    message_type: string;
     attempt_count: number;
     payload: unknown;
   }[]>`
@@ -130,6 +143,7 @@ async function claimBatch(
       message.connection_id,
       message.idempotency_key,
       message.correlation_id,
+      message.message_type,
       message.attempt_count,
       message.payload
   `;
@@ -140,6 +154,7 @@ async function claimBatch(
     connectionId: row.connection_id,
     idempotencyKey: row.idempotency_key,
     correlationId: row.correlation_id,
+    messageType: row.message_type,
     attemptCount: row.attempt_count,
     payload: row.payload
   }));
@@ -150,30 +165,12 @@ async function processMessage(
   provider: InstagramOfficialProvider,
   message: ClaimedMessage
 ): Promise<void> {
-  let payload: OutboundPayload;
+  let providerResult: ProviderSendResult;
   try {
-    payload = parseOutboundPayload(message.payload);
+    providerResult = await dispatchProviderMutation(provider, message);
   } catch (error) {
-    await finishDefinitiveFailure(
-      sql,
-      message.id,
-      error instanceof Error ? error.message : "INVALID_OUTBOUND_PAYLOAD"
-    );
-    return;
-  }
-
-  let providerResult;
-  try {
-    providerResult = await provider.sendText({
-      connectionId: message.connectionId as ConnectionId,
-      recipientExternalId: payload.recipientExternalId,
-      text: payload.text,
-      idempotencyKey: message.idempotencyKey,
-      correlationId: message.correlationId
-    });
-  } catch (error) {
-    // The provider adapter only throws for failures before it can safely report
-    // a transport outcome (for example credential decryption/configuration).
+    // Parsing, credential decryption and local configuration failures happen
+    // before a provider adapter can safely report a transport outcome.
     await finishDefinitiveFailure(
       sql,
       message.id,
@@ -206,9 +203,9 @@ async function processMessage(
 
     await persistSnapshot(sql, message.id, snapshot);
   } catch (error) {
-    // The provider call already happened. We deliberately keep PROCESSING and
-    // the lease intact. Expiry converts the message to SEND_RESULT_UNKNOWN,
-    // preventing an unsafe duplicate retry after a post-dispatch DB failure.
+    // The provider call already happened. Preserve PROCESSING and its lease.
+    // Lease expiry quarantines the message as SEND_RESULT_UNKNOWN instead of
+    // replaying a potentially successful side effect.
     console.error("Failed to persist outbound provider outcome; preserving PROCESSING lease", {
       messageId: message.id,
       correlationId: message.correlationId,
@@ -216,6 +213,46 @@ async function processMessage(
       error: error instanceof Error ? error.message : "UNKNOWN_PERSISTENCE_FAILURE"
     });
   }
+}
+
+async function dispatchProviderMutation(
+  provider: InstagramOfficialProvider,
+  message: ClaimedMessage
+): Promise<ProviderSendResult> {
+  const common = {
+    connectionId: message.connectionId as ConnectionId,
+    idempotencyKey: message.idempotencyKey,
+    correlationId: message.correlationId
+  };
+
+  if (message.messageType === MESSAGE_TYPE_TEXT) {
+    const payload = parseTextPayload(message.payload);
+    return provider.sendText({
+      ...common,
+      recipientExternalId: payload.recipientExternalId,
+      text: payload.text
+    });
+  }
+
+  if (message.messageType === MESSAGE_TYPE_COMMENT_PUBLIC_REPLY) {
+    const payload = parseCommentPayload(message.payload);
+    return provider.replyToComment({
+      ...common,
+      commentId: payload.commentId,
+      text: payload.text
+    });
+  }
+
+  if (message.messageType === MESSAGE_TYPE_COMMENT_PRIVATE_REPLY) {
+    const payload = parseCommentPayload(message.payload);
+    return provider.privateReplyToComment({
+      ...common,
+      commentId: payload.commentId,
+      text: payload.text
+    });
+  }
+
+  throw new Error(`UNSUPPORTED_OUTBOUND_MESSAGE_TYPE:${message.messageType}`);
 }
 
 async function persistSnapshot(
@@ -396,9 +433,8 @@ function parseStoredCredential(value: string): {
   };
 }
 
-function parseOutboundPayload(value: unknown): OutboundPayload {
-  if (!isRecord(value)) throw new Error("INVALID_OUTBOUND_PAYLOAD");
-  if (value.channel !== "instagram") throw new Error("UNSUPPORTED_OUTBOUND_CHANNEL");
+function parseTextPayload(value: unknown): TextPayload {
+  if (!isRecord(value) || value.channel !== "instagram") throw new Error("INVALID_OUTBOUND_TEXT_PAYLOAD");
   if (typeof value.recipientExternalId !== "string" || !value.recipientExternalId) {
     throw new Error("RECIPIENT_EXTERNAL_ID_MISSING");
   }
@@ -407,6 +443,18 @@ function parseOutboundPayload(value: unknown): OutboundPayload {
   return {
     channel: "instagram",
     recipientExternalId: value.recipientExternalId,
+    text: value.text
+  };
+}
+
+function parseCommentPayload(value: unknown): CommentPayload {
+  if (!isRecord(value) || value.channel !== "instagram") throw new Error("INVALID_COMMENT_ACTION_PAYLOAD");
+  if (typeof value.commentId !== "string" || !value.commentId) throw new Error("COMMENT_ID_MISSING");
+  if (typeof value.text !== "string" || !value.text) throw new Error("COMMENT_ACTION_TEXT_MISSING");
+
+  return {
+    channel: "instagram",
+    commentId: value.commentId,
     text: value.text
   };
 }
