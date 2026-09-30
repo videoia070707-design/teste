@@ -29,8 +29,6 @@ services:
         sync: false
       - key: META_APP_ID
         sync: false
-      - key: META_APP_SECRET
-        sync: false
       - key: INSTAGRAM_GRAPH_BASE_URL
         value: https://graph.instagram.com/
       - key: INSTAGRAM_GRAPH_API_VERSION
