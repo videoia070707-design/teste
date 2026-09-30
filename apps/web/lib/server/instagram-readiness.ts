@@ -33,6 +33,16 @@ export interface InstagramReadinessReport {
   liveEvidence: ReadinessCheck[];
 }
 
+interface ProviderRuntimeReadiness {
+  appId: string | null;
+  oauthAuthorizeUrl: string | null;
+  oauthTokenUrl: string | null;
+  longLivedTokenUrl: string | null;
+  graphBaseUrl: string | null;
+  graphApiVersion: string | null;
+  identityProbePath: string | null;
+}
+
 const EXTERNAL_CHECKS = [
   ["meta_business_app_created", "Meta Business app criado"],
   ["instagram_professional_test_account", "Conta Instagram Business/Creator de teste pronta"],
@@ -50,6 +60,15 @@ export async function buildInstagramReadinessReport(
   const origin = parseOrigin(process.env.APP_ORIGIN);
   const supabaseOrigin = parseHttpsOrigin(process.env.NEXT_PUBLIC_SUPABASE_URL);
   const platformSecrets = await readPlatformSecretReadiness(sql);
+  const providerConfig = await readProviderRuntimeReadiness(sql);
+
+  const appId = firstConfigured(providerConfig.appId, process.env.META_APP_ID);
+  const oauthAuthorizeUrl = firstConfigured(providerConfig.oauthAuthorizeUrl, process.env.INSTAGRAM_OAUTH_AUTHORIZE_URL);
+  const oauthTokenUrl = firstConfigured(providerConfig.oauthTokenUrl, process.env.INSTAGRAM_OAUTH_TOKEN_URL);
+  const longLivedTokenUrl = firstConfigured(providerConfig.longLivedTokenUrl, process.env.INSTAGRAM_LONG_LIVED_TOKEN_URL);
+  const graphBaseUrl = firstConfigured(providerConfig.graphBaseUrl, process.env.INSTAGRAM_GRAPH_BASE_URL);
+  const graphApiVersion = firstConfigured(providerConfig.graphApiVersion, process.env.INSTAGRAM_GRAPH_API_VERSION);
+  const identityProbePath = firstConfigured(providerConfig.identityProbePath, process.env.INSTAGRAM_IDENTITY_PROBE_PATH);
 
   const urls = {
     appOrigin: origin,
@@ -71,7 +90,7 @@ export async function buildInstagramReadinessReport(
       secureDatabaseTransport(process.env.DATABASE_URL, process.env.APP_ORIGIN),
       "Ambiente público exige sslmode=require, verify-ca ou verify-full. Desenvolvimento local pode usar conexão local sem TLS."
     ),
-    envCheck("meta_app_id", "META_APP_ID", present(process.env.META_APP_ID), "ID do App Meta usado pelo OAuth."),
+    envCheck("meta_app_id", "Meta App ID", present(appId), "Produção lê app_id de app_private.provider_runtime_config; env é apenas fallback portátil."),
     envCheck(
       "meta_app_secret",
       "Meta App Secret",
@@ -79,12 +98,12 @@ export async function buildInstagramReadinessReport(
       "Produção usa o Supabase Vault via bridge allowlisted; META_APP_SECRET permanece apenas como fallback local compatível."
     ),
     envCheck("webhook_verify_token", "Webhook verify token no Supabase Vault", platformSecrets.webhookVerifyTokenReady, "Verify token forte usado pelo challenge público do webhook Edge."),
-    envCheck("oauth_authorize", "INSTAGRAM_OAUTH_AUTHORIZE_URL", validHttpsUrl(process.env.INSTAGRAM_OAUTH_AUTHORIZE_URL), "Endpoint OAuth configurável."),
-    envCheck("oauth_token", "INSTAGRAM_OAUTH_TOKEN_URL", validHttpsUrl(process.env.INSTAGRAM_OAUTH_TOKEN_URL), "Endpoint de troca de authorization code."),
-    envCheck("long_lived_token", "INSTAGRAM_LONG_LIVED_TOKEN_URL", validHttpsUrl(process.env.INSTAGRAM_LONG_LIVED_TOKEN_URL), "Endpoint de troca para long-lived token."),
-    envCheck("graph_base", "INSTAGRAM_GRAPH_BASE_URL", validHttpsUrl(process.env.INSTAGRAM_GRAPH_BASE_URL), "Base URL da API oficial."),
-    envCheck("graph_version", "INSTAGRAM_GRAPH_API_VERSION", safeApiVersion(process.env.INSTAGRAM_GRAPH_API_VERSION), "Versão explícita; upgrades não são silenciosos."),
-    envCheck("identity_probe", "INSTAGRAM_IDENTITY_PROBE_PATH", safeProbePath(process.env.INSTAGRAM_IDENTITY_PROBE_PATH), "Probe explícito necessário para health sem falso positivo."),
+    envCheck("oauth_authorize", "Instagram OAuth authorize URL", validHttpsUrl(oauthAuthorizeUrl), "Produção lê endpoint validado de provider_runtime_config; nunca usa endpoint legado por suposição."),
+    envCheck("oauth_token", "Instagram OAuth token URL", validHttpsUrl(oauthTokenUrl), "Endpoint de troca de authorization code validado para o App Meta real."),
+    envCheck("long_lived_token", "Instagram long-lived token URL", validHttpsUrl(longLivedTokenUrl), "Endpoint de troca para long-lived token validado para o App Meta real."),
+    envCheck("graph_base", "Instagram Graph base URL", validHttpsUrl(graphBaseUrl), "Base URL oficial centralizada no banco para evitar drift entre hosts."),
+    envCheck("graph_version", "Instagram Graph API version", safeApiVersion(graphApiVersion), "Versão explícita; upgrades não são silenciosos."),
+    envCheck("identity_probe", "Instagram identity probe", safeProbePath(identityProbePath), "Probe explícito necessário para health sem falso positivo."),
     envCheck("secret_keyring", "Provider AES keyring no Supabase Vault", platformSecrets.providerKeyringReady, "Keyring AES-256-GCM compartilhado pelo web e Edge runtime."),
     envCheck("legal_entity", "LEGAL_ENTITY_NAME", present(process.env.LEGAL_ENTITY_NAME), "Nome do operador exibido nas páginas legais."),
     envCheck("support_email", "SUPPORT_EMAIL", validEmail(process.env.SUPPORT_EMAIL), "Contato público para privacidade e exclusão de dados.")
@@ -186,6 +205,56 @@ export async function buildInstagramReadinessReport(
   };
 }
 
+async function readProviderRuntimeReadiness(sql: DatabaseClient): Promise<ProviderRuntimeReadiness> {
+  try {
+    const [row] = await sql<{
+      app_id: string | null;
+      oauth_authorize_url: string | null;
+      oauth_token_url: string | null;
+      long_lived_token_url: string | null;
+      graph_base_url: string | null;
+      graph_api_version: string | null;
+      identity_probe_path: string | null;
+    }[]>`
+      select
+        app_id,
+        oauth_authorize_url,
+        oauth_token_url,
+        long_lived_token_url,
+        graph_base_url,
+        graph_api_version,
+        identity_probe_path
+      from app_private.provider_runtime_config
+      where provider_key = ${PROVIDER_KEY}
+      limit 1
+    `;
+
+    return {
+      appId: row?.app_id ?? null,
+      oauthAuthorizeUrl: row?.oauth_authorize_url ?? null,
+      oauthTokenUrl: row?.oauth_token_url ?? null,
+      longLivedTokenUrl: row?.long_lived_token_url ?? null,
+      graphBaseUrl: row?.graph_base_url ?? null,
+      graphApiVersion: row?.graph_api_version ?? null,
+      identityProbePath: row?.identity_probe_path ?? null
+    };
+  } catch {
+    return emptyProviderRuntimeReadiness();
+  }
+}
+
+function emptyProviderRuntimeReadiness(): ProviderRuntimeReadiness {
+  return {
+    appId: null,
+    oauthAuthorizeUrl: null,
+    oauthTokenUrl: null,
+    longLivedTokenUrl: null,
+    graphBaseUrl: null,
+    graphApiVersion: null,
+    identityProbePath: null
+  };
+}
+
 async function readPlatformSecretReadiness(sql: DatabaseClient): Promise<{
   metaAppSecretReady: boolean;
   webhookVerifyTokenReady: boolean;
@@ -208,6 +277,13 @@ async function readPlatformSecretReadiness(sql: DatabaseClient): Promise<{
       providerKeyringReady: false
     };
   }
+}
+
+function firstConfigured(hostedValue: string | null, fallbackValue: string | undefined): string | undefined {
+  const hosted = hostedValue?.trim();
+  if (hosted) return hosted;
+  const fallback = fallbackValue?.trim();
+  return fallback || undefined;
 }
 
 function envCheck(key: string, label: string, ready: boolean, detail: string): ReadinessCheck {
