@@ -1,0 +1,105 @@
+services:
+  - type: web
+    name: automation-web
+    runtime: docker
+    region: virginia
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health/ready
+    maxShutdownDelaySeconds: 60
+    preDeployCommand: pnpm --filter @automation/storage-postgres migrate
+    envVars:
+      - key: SERVICE
+        value: '@automation/web'
+      - key: PORT
+        value: '10000'
+      - key: APP_ORIGIN
+        fromService:
+          type: web
+          name: automation-web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        value: https://cqtrigqlktekczbbsxiy.supabase.co
+      - key: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: PROVIDER_SECRET_CURRENT_KEY_VERSION
+        value: v1
+      - key: PROVIDER_SECRET_KEYS_JSON
+        sync: false
+      - key: META_APP_ID
+        sync: false
+      - key: META_APP_SECRET
+        sync: false
+      - key: META_WEBHOOK_VERIFY_TOKEN
+        sync: false
+      - key: META_WEBHOOK_SIGNATURE_HEADER
+        value: x-hub-signature-256
+      - key: INSTAGRAM_GRAPH_BASE_URL
+        value: https://graph.instagram.com/
+      - key: INSTAGRAM_GRAPH_API_VERSION
+        sync: false
+      - key: INSTAGRAM_IDENTITY_PROBE_PATH
+        sync: false
+      - key: INSTAGRAM_OAUTH_AUTHORIZE_URL
+        sync: false
+      - key: INSTAGRAM_OAUTH_TOKEN_URL
+        sync: false
+      - key: INSTAGRAM_OAUTH_TOKEN_ENCODING
+        value: multipart
+      - key: INSTAGRAM_LONG_LIVED_TOKEN_URL
+        value: https://graph.instagram.com/access_token
+      - key: LEGAL_ENTITY_NAME
+        sync: false
+      - key: SUPPORT_EMAIL
+        sync: false
+
+  - type: worker
+    name: automation-worker-ingress
+    runtime: docker
+    region: virginia
+    plan: 0.5c-512mb
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    maxShutdownDelaySeconds: 60
+    envVars:
+      - key: SERVICE
+        value: '@automation/worker-ingress'
+      - key: DATABASE_URL
+        sync: false
+      - key: INGRESS_WORKER_BATCH_SIZE
+        value: '10'
+      - key: INGRESS_WORKER_POLL_MS
+        value: '1000'
+      - key: INGRESS_WORKER_LEASE_SECONDS
+        value: '60'
+
+  - type: worker
+    name: automation-worker-outbound
+    runtime: docker
+    region: virginia
+    plan: 0.5c-512mb
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    maxShutdownDelaySeconds: 90
+    envVars:
+      - key: SERVICE
+        value: '@automation/worker-outbound'
+      - key: DATABASE_URL
+        sync: false
+      - key: PROVIDER_SECRET_CURRENT_KEY_VERSION
+        value: v1
+      - key: PROVIDER_SECRET_KEYS_JSON
+        sync: false
+      - key: INSTAGRAM_GRAPH_BASE_URL
+        value: https://graph.instagram.com/
+      - key: INSTAGRAM_GRAPH_API_VERSION
+        sync: false
+      - key: OUTBOUND_WORKER_BATCH_SIZE
+        value: '10'
+      - key: OUTBOUND_WORKER_POLL_MS
+        value: '750'
+      - key: OUTBOUND_WORKER_LEASE_SECONDS
+        value: '45'
