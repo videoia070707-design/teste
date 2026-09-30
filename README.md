@@ -12,121 +12,166 @@ Plataforma SaaS de automação para Instagram e WhatsApp.
 - Reliability antes de expansão funcional
 - Gate PASS somente por evidência operacional
 - Least privilege por capability implementada
-- Runtime portátil: containers versionados, sem dependência estrutural de Replit/Vercel/Render
+- **Free-first durante desenvolvimento/HOST PASS**
+- Runtime portátil: Supabase Free agora; containers continuam fallback futuro, sem lock-in
 
 ## Fase atual
 
-G0–G2 estão concluídos no core. G3 — Instagram Official — está **DEPLOYMENT-READY**. O Supabase real de teste já foi provisionado e validado; o próximo passo é provisionar os serviços do `render.yaml` e então executar o HOST PASS contra a Meta.
+G0–G2 estão concluídos. G3 — Instagram Official — está **DEPLOYMENT-READY no backend gratuito** e ainda aguarda o HOST PASS real contra a Meta.
 
 Há três estados deliberadamente diferentes:
 
-1. **Code-ready** — domínio, provider, workers, segurança e testes estão implementados.
-2. **Deployment-ready** — migrations, containers, health checks, worker heartbeat e release artifacts passaram pelo CI e podem ser executados em infraestrutura compatível.
+1. **Code-ready** — domínio, provider, segurança e testes estão implementados.
+2. **Deployment-ready** — runtime, migrations, filas, retries, health e observabilidade executam em infraestrutura real.
 3. **HOST PASS** — OAuth + webhook + inbound + outbound reais foram provados contra a Meta no mesmo workspace.
 
 Nenhum dos dois primeiros estados promove automaticamente o terceiro.
 
-### Infraestrutura real já provisionada
+## Infraestrutura real atual — US$ 0 nesta fase
 
-Supabase de teste do G3:
+Projeto Supabase Free do G3:
 
 - project ref: `cqtrigqlktekczbbsxiy`;
 - região: `sa-east-1` (São Paulo);
 - PostgreSQL 17;
-- migrations `001`–`012` aplicadas;
-- `app_private` sem `USAGE` para `anon` e `authenticated`;
-- advisor de segurança sem lints após as migrations;
-- foreign keys críticas com índices de cobertura;
-- publishable key usada apenas como chave pública de Auth/Data API; provider/database secrets continuam fora do Git.
+- migrations `001`–`018` aplicadas no fluxo do projeto;
+- dados do produto isolados em `app_private`;
+- `anon` e `authenticated` sem acesso direto ao schema privado;
+- Security Advisor atualmente sem lints;
+- Supabase Auth para identidade/sessão;
+- PGMQ/Supabase Queues para sinais duráveis de ingress e outbound;
+- `pg_net` para wake-up assíncrono do executor;
+- `pg_cron` a cada 15 segundos como recovery/retry sweep;
+- Edge Function `g3-runtime` como executor principal;
+- Supabase Vault para token interno do runtime e keyring AES-256-GCM;
+- provider runtime config server-only no Postgres;
+- Docker workers mantidos apenas como fallback futuro/self-hosting.
 
-Render:
+O runtime foi validado no projeto real: invocações da Edge Function retornam HTTP 200, filas permanecem vazias quando não há trabalho e o recovery Cron está ativo.
 
-- `render.yaml` define `automation-web`, `automation-worker-ingress` e `automation-worker-outbound`;
-- web Free é apenas ambiente controlado para HOST PASS, não produção always-on;
-- os dois workers usam o menor plano de background worker disponível;
-- `APP_ORIGIN` deriva de `RENDER_EXTERNAL_URL`;
-- shared secrets são declarados uma vez no web service e copiados para workers via `fromService` quando aplicável;
-- deploy automático usa `checksPass`;
-- migrations rodam no pre-deploy do worker ingress pago; web Free não usa pre-deploy;
-- CI específico do Blueprint impede `preDeployCommand` em plano Free e worker Free.
+**Não há worker pago obrigatório no G3 atual.** O antigo Blueprint do Render e seu CI específico foram removidos para evitar provisioning pago acidental.
 
-O código atual já possui:
+## Runtime G3 Free
 
-- sessão Supabase SSR, workspace e RBAC no servidor;
-- OAuth/Instagram Login com `state` persistido, hash-only, consumível uma única vez e vinculado ao usuário que iniciou o fluxo;
-- revalidação de membership/permissão no callback OAuth;
-- credenciais do provider criptografadas e referenciadas fora da UI;
-- webhook com validação de assinatura e persistência antes do ACK;
-- worker de ingress com lease, retry, deduplicação e collision guard;
+Fluxo principal:
+
+```text
+Instagram / Webhook
+        ↓
+      Web API
+        ↓
+webhook_ingress_events (fonte de verdade)
+        ↓ trigger
+PGMQ instagram_ingress
+        ↓ pg_net wake-up
+Supabase Edge Function g3-runtime
+        ↓
+raw_events → canonical_events → outbox
+```
+
+Outbound:
+
+```text
+API / Automation
+      ↓
+messages: QUEUED (fonte de verdade)
+      ↓ trigger
+PGMQ instagram_outbound
+      ↓ pg_net wake-up
+Supabase Edge Function g3-runtime
+      ↓
+Meta API
+      ↓
+SENT / RETRYING / FAILED / SEND_RESULT_UNKNOWN
+```
+
+A fila é um acelerador/wake-up. A correção do sistema continua apoiada no estado durável das tabelas, leases, idempotência e recovery sweep. Se um sinal de fila for perdido, o Cron recupera o trabalho pronto diretamente do banco.
+
+### Reliability preservada
+
+- evento persistido antes do ACK do webhook;
+- leases finitas;
+- deduplicação + fingerprint collision guard;
+- retries com backoff somente quando seguros;
+- 5xx/timeout/transporte ambíguo após dispatch → `SEND_RESULT_UNKNOWN`;
+- lease outbound expirada após possível side effect → `SEND_RESULT_UNKNOWN`;
+- nenhum blind retry de resultado ambíguo;
+- reconciliation manual auditável;
+- private reply com claim único por comentário;
+- heartbeat do Edge runtime separado de evidência de HOST PASS.
+
+## O código atual já possui
+
+- Supabase Auth SSR, workspace automático e RBAC server-side;
+- OAuth Instagram com state hash-only, single-use e actor-bound;
+- credenciais do provider criptografadas com AES-256-GCM;
+- keyring padrão armazenado no Supabase Vault; env keyring fica somente como fallback legado/self-host;
+- webhook com HMAC e persistência antes do ACK;
 - normalização de `message.received`, `message.sent` e `comment.received`;
-- outbound worker separado do HTTP, com idempotência semântica e `SEND_RESULT_UNKNOWN` para outcomes ambíguos;
-- DM, resposta pública a comentário e private reply/comment→DM pelo provider oficial;
-- claim único de private reply por comentário;
-- health center, capability evidence e reconciliação manual auditável;
-- Meta Readiness Center separando configuração, attestations externas e live evidence;
-- páginas públicas de Privacy Policy e Data Deletion que só ficam disponíveis quando identidade legal e contato estão configurados;
-- dashboard de Reliability e Overview ligados ao banco real;
-- G3 calculado por evidência: OAuth válido + webhook real `message.received` + DM outbound aceita com provider message ID;
-- web liveness/readiness endpoints;
-- heartbeat persistente dos workers e estados `RUNNING`, `STALE`, `STOPPED`, `NOT_SEEN`;
-- migration runner com advisory lock, ledger e checksum imutável;
-- Dockerfile único parametrizado por serviço + Compose para web/workers/migration operation;
-- release workflow que publica imagens versionadas no GHCR somente em tags `vX.Y.Z`;
-- CI com PostgreSQL real para migrations, migration runner idempotente, invariantes, typecheck, testes, build, Compose e imagens Docker.
+- DM, resposta pública a comentário e private reply/comment→DM;
+- Connection Health Center e capability evidence;
+- Meta Readiness Center;
+- páginas de Privacy Policy e Data Deletion condicionadas à identidade legal configurada;
+- dashboard Reliability ligado ao banco real;
+- runtime primário Supabase Edge + PGMQ + Cron;
+- workers Docker equivalentes mantidos como fallback portátil;
+- CI com PostgreSQL real, migrations, invariants, typecheck, testes, build e containers.
 
-### Instagram scopes do G3
+## Instagram scopes do G3
 
-O OAuth atual solicita apenas as permissões usadas pelas capacidades implementadas:
+O OAuth solicita somente as permissões usadas agora:
 
 - `instagram_business_basic`
 - `instagram_business_manage_messages`
 - `instagram_business_manage_comments`
 
-`instagram_business_content_publish` fica separado como escopo opcional futuro. `content.publish` permanece indisponível até a função existir e ter seus próprios testes. Isso evita pedir permissão antecipadamente apenas porque a API a oferece.
+`instagram_business_content_publish` permanece opcional/futuro. `content.publish` fica indisponível até a função existir e possuir testes próprios.
 
-G3 **não deve ser marcado PASS apenas porque o código compila, o container sobe ou um checklist foi confirmado**. O status só muda quando as evidências de host real forem persistidas no workspace.
+G3 **não deve ser marcado PASS porque o banco, Edge Function, Cron ou frontend estão online**. O status só muda após evidência real persistida de:
 
-Runbook operacional do teste real: `docs/g3-host-pass-runbook.md`.
+1. OAuth válido com conta profissional;
+2. webhook assinado real;
+3. `message.received` real;
+4. DM outbound real aceita pela Meta com provider message ID.
 
-## Runtime
+Runbook: `docs/g3-host-pass-runbook.md`.
 
-Processos long-lived:
+## Web
 
-- `@automation/web`
-- `@automation/worker-ingress`
-- `@automation/worker-outbound`
+`apps/web` continua sendo Next.js e precisa de uma URL HTTPS pública para Auth/OAuth/webhook durante o HOST PASS. Nesta fase, somente opções com plano gratuito serão consideradas. O runtime assíncrono não depende do host do frontend.
 
-Operação one-shot:
+## Fallback portátil
 
-- `@automation/storage-postgres migrate`
+Os seguintes componentes permanecem no repositório para self-hosting ou escala futura, mas **não são requisitos do G3 Free**:
 
-Documentação completa: `docs/deployment.md`.
+- `apps/worker-ingress`
+- `apps/worker-outbound`
+- `Dockerfile`
+- `compose.yaml`
+- release images no GHCR
 
-Uma tag de release válida, por exemplo `v0.1.0`, prepara publicação das imagens:
-
-- `ghcr.io/<owner>/automation-migrate:v0.1.0`
-- `ghcr.io/<owner>/automation-web:v0.1.0`
-- `ghcr.io/<owner>/automation-worker-ingress:v0.1.0`
-- `ghcr.io/<owner>/automation-worker-outbound:v0.1.0`
-
-As imagens de release incluem SBOM/provenance e são portáveis para qualquer host de containers compatível.
+Isso preserva independência do Supabase caso o volume futuro exija workers dedicados.
 
 ## Estrutura
 
-- `apps/web`: dashboard web, auth, OAuth/callbacks, Readiness Center e APIs protegidas
-- `apps/worker-ingress`: processamento durável de webhooks
-- `apps/worker-outbound`: envio durável e recuperação segura de side effects
-- `packages/core`: tipos, RBAC e regras de domínio compartilhadas
-- `packages/providers`: contratos de providers e capabilities
-- `packages/provider-instagram-official`: adapter Meta/Instagram oficial
-- `packages/reliability`: estados, idempotência, retry e reconciliação
-- `packages/secrets`: envelope encryption e keyring
-- `packages/storage-postgres`: stores PostgreSQL server-only + migration runner
-- `database`: migrations imutáveis validadas no CI
-- `docs`: decisões arquiteturais, gates e deployment contract
+- `apps/web`: dashboard, Auth, OAuth/callbacks, webhook e APIs
+- `supabase/functions/g3-runtime`: executor gratuito de ingress/outbound
+- `apps/worker-ingress`: fallback Docker para ingress
+- `apps/worker-outbound`: fallback Docker para outbound
+- `packages/core`: domínio/RBAC
+- `packages/providers`: contratos/capabilities
+- `packages/provider-instagram-official`: adapter oficial Meta
+- `packages/reliability`: estados, retry, idempotência, reconciliação
+- `packages/secrets`: AES-GCM/envelope encryption
+- `packages/storage-postgres`: stores server-only + migration runner de fallback
+- `database`: migrations imutáveis
+- `docs`: gates, deployment e runbooks
 
-## Próximos gates
+## Próximos passos
 
-- G3: provisionar runtime público e fechar HOST PASS com uma conta Instagram profissional + App Meta reais
-- G4: WhatsApp Official — somente depois do G3 HOST PASS
-- G5: Unified Inbox + Contacts
+- manter o G3 no runtime gratuito;
+- colocar `apps/web` em uma URL HTTPS usando somente tier gratuito;
+- configurar Meta App real;
+- executar G3 HOST PASS;
+- somente depois iniciar G4 — WhatsApp Official;
+- G5 — Unified Inbox + Contacts após G4.
