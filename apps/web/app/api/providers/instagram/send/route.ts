@@ -8,7 +8,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request): Promise<Response> {
-  const { membership } = await requireWorkspaceContext();
+  const { userId, membership } = await requireWorkspaceContext();
   if (!can(membership.role as WorkspaceRole, "conversation.reply")) {
     return Response.json({ error: "forbidden" }, { status: 403 });
   }
@@ -62,6 +62,28 @@ export async function POST(request: Request): Promise<Response> {
       text: input.text
     }
   });
+
+  if (creation.created) {
+    await database`
+      insert into app_private.audit_logs (
+        workspace_id,
+        actor_user_id,
+        action,
+        resource_type,
+        resource_id,
+        correlation_id,
+        metadata
+      ) values (
+        ${membership.workspaceId},
+        ${userId},
+        'instagram.message.queued',
+        'message',
+        ${creation.message.id},
+        ${creation.message.correlationId},
+        ${database.json({ provider: "instagram.meta.official", mode: "official" })}
+      )
+    `;
+  }
 
   return Response.json(
     {
