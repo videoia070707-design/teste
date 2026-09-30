@@ -42,19 +42,30 @@ jobs:
             META_APP_SECRET
             META_WEBHOOK_VERIFY_TOKEN
             META_WEBHOOK_SIGNATURE_HEADER
+            META_APP_ID
+            INSTAGRAM_GRAPH_BASE_URL
+            INSTAGRAM_GRAPH_API_VERSION
+            INSTAGRAM_IDENTITY_PROBE_PATH
+            INSTAGRAM_OAUTH_AUTHORIZE_URL
+            INSTAGRAM_OAUTH_TOKEN_URL
+            INSTAGRAM_OAUTH_TOKEN_ENCODING
+            INSTAGRAM_LONG_LIVED_TOKEN_URL
           ]
           leaked = keys & forbidden
-          abort "Supabase/Vault-owned secrets leaked back into Render config: #{leaked.inspect}" unless leaked.empty?
+          abort "Vault/database-owned provider config leaked back into Render config: #{leaked.inspect}" unless leaked.empty?
 
           required = %w[
             SERVICE APP_ORIGIN NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-            DATABASE_URL DATABASE_POOL_MAX META_APP_ID
+            DATABASE_URL DATABASE_POOL_MAX LEGAL_ENTITY_NAME SUPPORT_EMAIL
           ]
           missing = required - keys
           abort "required web env declarations missing: #{missing.inspect}" unless missing.empty?
 
           database_url = envs.find { |entry| entry["key"] == "DATABASE_URL" }
           abort "DATABASE_URL must remain an operator-supplied secret" unless database_url && database_url["sync"] == false
+
+          publishable_key = envs.find { |entry| entry["key"] == "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY" }
+          abort "publishable key must not be committed in render.yaml" unless publishable_key && publishable_key["sync"] == false
 
           database_pool = envs.find { |entry| entry["key"] == "DATABASE_POOL_MAX" }
           abort "free web database pool must remain capped at 3" unless database_pool && database_pool["value"].to_s == "3"
