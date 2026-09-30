@@ -6,7 +6,12 @@ import {
   type InstagramCredentialResolver,
   type InstagramCredentials
 } from "@automation/provider-instagram-official";
-import { applyProviderSendResult, nextRetryDelaySeconds, type MessageDeliverySnapshot } from "@automation/reliability";
+import {
+  applyProviderSendResult,
+  DEFAULT_RETRY_POLICY,
+  nextRetryDelaySeconds,
+  type MessageDeliverySnapshot
+} from "@automation/reliability";
 import { AesGcmSecretCipher, StaticSecretKeyring } from "@automation/secrets";
 import { createDatabaseClient, type DatabaseClient } from "@automation/storage-postgres";
 import { PostgresEncryptedSecretVault } from "@automation/storage-postgres/secrets";
@@ -161,41 +166,68 @@ async function processMessage(
     return;
   }
 
+  let providerResult;
   try {
-    const result = await provider.sendText({
+    providerResult = await provider.sendText({
       connectionId: message.connectionId as ConnectionId,
       recipientExternalId: payload.recipientExternalId,
       text: payload.text,
       idempotencyKey: message.idempotencyKey,
       correlationId: message.correlationId
     });
-
-    const snapshot = applyProviderSendResult(
-      { state: "PROCESSING", reconciliationRequired: false },
-      result
-    );
-
-    if (snapshot.state === "RETRYING") {
-      const delay = nextRetryDelaySeconds(message.attemptCount);
-      if (delay === null) {
-        await finishDead(sql, message.id, snapshot.lastErrorCode ?? "RETRY_LIMIT_EXHAUSTED");
-        return;
-      }
-      await scheduleRetry(sql, message.id, delay, snapshot.lastErrorCode ?? "PROVIDER_RETRYABLE_REJECTION");
-      return;
-    }
-
-    await persistSnapshot(sql, message.id, snapshot);
   } catch (error) {
-    // Credential resolution and local configuration failures happen before the
-    // provider request is dispatched, so they are definitive local failures,
-    // not SEND_RESULT_UNKNOWN.
+    // The provider adapter only throws for failures before it can safely report
+    // a transport outcome (for example credential decryption/configuration).
+    // These are definitive local failures and are safe to mark FAILED.
     await finishDefinitiveFailure(
       sql,
       message.id,
       error instanceof Error ? error.message : "PROVIDER_PRE_DISPATCH_FAILURE"
     );
+    return;
   }
+
+  const snapshot = applyProviderSendResult(
+    { state: "PROCESSING", reconciliationRequired: false },
+    providerResult
+  );
+
+  try {
+    if (snapshot.state === "RETRYING") {
+      const delay = retryDelayForClaimedAttempt(message.attemptCount);
+      if (delay === null) {
+        await finishDead(sql, message.id, snapshot.lastErrorCode ?? "RETRY_LIMIT_EXHAUSTED");
+        return;
+      }
+
+      await scheduleRetry(
+        sql,
+        message.id,
+        delay,
+        snapshot.lastErrorCode ?? "PROVIDER_RETRYABLE_REJECTION"
+      );
+      return;
+    }
+
+    await persistSnapshot(sql, message.id, snapshot);
+  } catch (error) {
+    // CRITICAL: the provider call has already happened. Do not mark FAILED and
+    // do not release the lease for retry. Leave PROCESSING untouched so the
+    // finite lease expires and quarantineExpiredProcessing() converts it into
+    // SEND_RESULT_UNKNOWN. This prevents duplicate side effects after a DB
+    // failure that occurs after Meta may have accepted the message.
+    console.error("Failed to persist outbound provider outcome; preserving PROCESSING lease", {
+      messageId: message.id,
+      correlationId: message.correlationId,
+      providerState: snapshot.state,
+      error: error instanceof Error ? error.message : "UNKNOWN_PERSISTENCE_FAILURE"
+    });
+  }
+}
+
+function retryDelayForClaimedAttempt(attemptCount: number): number | null {
+  if (attemptCount >= DEFAULT_RETRY_POLICY.maxAttempts) return null;
+  return nextRetryDelaySeconds(Math.max(0, attemptCount - 1));
 }
 
 async function persistSnapshot(
