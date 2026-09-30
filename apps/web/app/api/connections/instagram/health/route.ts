@@ -1,5 +1,6 @@
 import { can, type ConnectionId, type ProviderMode, type WorkspaceId, type WorkspaceRole } from "@automation/core";
 import type { ConnectionHealthState, ProviderConnection } from "@automation/providers";
+import { NextResponse } from "next/server";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
 import { getInstagramServerConfig } from "@/lib/server/instagram";
@@ -14,14 +15,25 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "forbidden" }, { status: 403 });
   }
 
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return Response.json({ error: "invalid_json_body" }, { status: 400 });
+  const formPost = request.headers.get("content-type")?.includes("application/x-www-form-urlencoded") ?? false;
+  let connectionId: string | null = null;
+
+  if (formPost) {
+    const form = await request.formData();
+    const raw = form.get("connectionId");
+    connectionId = typeof raw === "string" && raw ? raw : null;
+  } else {
+    try {
+      const body = await request.json() as unknown;
+      if (isRecord(body) && typeof body.connectionId === "string" && body.connectionId) {
+        connectionId = body.connectionId;
+      }
+    } catch {
+      return Response.json({ error: "invalid_json_body" }, { status: 400 });
+    }
   }
 
-  if (!isRecord(body) || typeof body.connectionId !== "string" || !body.connectionId) {
+  if (!connectionId) {
     return Response.json({ error: "connection_id_required" }, { status: 400 });
   }
 
@@ -48,7 +60,7 @@ export async function POST(request: Request): Promise<Response> {
       webhook_healthy,
       last_event_at
     from app_private.channel_connections
-    where id = ${body.connectionId}
+    where id = ${connectionId}
       and workspace_id = ${membership.workspaceId}
       and channel = 'instagram'
       and provider_key = 'instagram.meta.official'
@@ -113,6 +125,12 @@ export async function POST(request: Request): Promise<Response> {
     }
   });
 
+  if (formPost) {
+    const target = new URL("/connections", getAppOrigin());
+    target.searchParams.set("health", finalState.toLowerCase());
+    return NextResponse.redirect(target, { status: 303 });
+  }
+
   return Response.json({
     connectionId: connection.id,
     state: finalState,
@@ -138,6 +156,12 @@ function combineHealth(input: {
   if (input.webhookHealthy === false) return "DEGRADED_PARTIAL";
   if (input.webhookHealthy === null) return "STALE";
   return "HEALTHY";
+}
+
+function getAppOrigin(): string {
+  const configured = process.env.APP_ORIGIN;
+  if (!configured) throw new Error("APP_ORIGIN is not configured.");
+  return new URL(configured).origin;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
