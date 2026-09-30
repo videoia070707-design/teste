@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
 import { buildInstagramReadinessReport } from "@/lib/server/instagram-readiness";
+import { getPlatformSecret } from "@/lib/server/platform-secrets";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -16,19 +17,13 @@ export async function POST(request: Request): Promise<Response> {
 
   const sql = getDatabase();
   const report = await buildInstagramReadinessReport(sql, membership.workspaceId);
-  const [secret] = await sql<{ decrypted_secret: string }[]>`
-    select decrypted_secret
-    from vault.decrypted_secrets
-    where name = 'meta_webhook_verify_token'
-    order by created_at desc
-    limit 1
-  `;
+  const verifyToken = await getPlatformSecret("meta_webhook_verify_token", sql);
 
   const challengeValue = `local-preflight-${randomUUID()}`;
-  const challengeReady = report.urls.webhookCallback && secret?.decrypted_secret
+  const challengeReady = report.urls.webhookCallback && verifyToken
     ? await verifyPublicEdgeChallenge(
         report.urls.webhookCallback,
-        secret.decrypted_secret,
+        verifyToken,
         challengeValue
       )
     : false;
