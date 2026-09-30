@@ -2,6 +2,7 @@ import Link from "next/link";
 import { can, type WorkspaceRole } from "@automation/core";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
+import { buildInstagramHostPassChallenge } from "@/lib/server/instagram-host-pass";
 import { buildInstagramReadinessReport, type ReadinessState } from "@/lib/server/instagram-readiness";
 
 export const dynamic = "force-dynamic";
@@ -9,13 +10,32 @@ export const dynamic = "force-dynamic";
 export default async function InstagramReadinessPage({
   searchParams
 }: {
-  searchParams: Promise<{ preflight?: string }>;
+  searchParams: Promise<{ preflight?: string; hostpass?: string }>;
 }) {
   const { membership } = await requireWorkspaceContext();
-  const report = await buildInstagramReadinessReport(getDatabase(), membership.workspaceId);
-  const canManage = can(membership.role as WorkspaceRole, "connections.manage");
+  const sql = getDatabase();
+  const report = await buildInstagramReadinessReport(sql, membership.workspaceId);
+  const role = membership.role as WorkspaceRole;
+  const canManage = can(role, "connections.manage");
+  const canHostPassReply = canManage && can(role, "conversation.reply");
   const params = await searchParams;
   const preflight = params.preflight === "ready" || params.preflight === "blocked" ? params.preflight : null;
+  const hostPassStatus = normalizeHostPassStatus(params.hostpass);
+  const hostPassChallenge = buildInstagramHostPassChallenge(membership.workspaceId);
+
+  const [challengeEvent] = await sql<{ occurred_at: string }[]>`
+    select event.occurred_at
+    from app_private.canonical_events event
+    join app_private.channel_connections connection
+      on connection.id = event.connection_id
+    where event.workspace_id = ${membership.workspaceId}
+      and event.provider = 'instagram.meta.official'
+      and event.event_type = 'message.received'
+      and event.payload ->> 'text' = ${hostPassChallenge}
+      and connection.provider_mode = 'official'
+    order by event.occurred_at desc
+    limit 1
+  `;
 
   return (
     <>
@@ -49,6 +69,12 @@ export default async function InstagramReadinessPage({
           {preflight === "ready"
             ? "Preflight local passou: configuração estrutural + challenge criptográfico estão prontos. Isso NÃO conta como HOST PASS."
             : "Preflight local bloqueado: uma ou mais configurações estruturais ainda precisam ser corrigidas. Nenhuma evidência real foi alterada."}
+        </div>
+      )}
+
+      {hostPassStatus && (
+        <div className={`notice ${hostPassStatus.tone}`} style={{ marginTop: 16 }}>
+          {hostPassStatus.message}
         </div>
       )}
 
@@ -88,7 +114,7 @@ export default async function InstagramReadinessPage({
             ))}
           </div>
           <div className="notice warning" style={{ marginTop: 16 }}>
-            A plataforma não oferece DM fria como capability oficial. O Send API é usado dentro das regras da conversa elegível.
+            A plataforma não oferece DM fria como capability oficial. O Send API só enfileira resposta para uma identidade observada em message.received verificado na mesma conexão.
           </div>
         </article>
 
@@ -103,6 +129,52 @@ export default async function InstagramReadinessPage({
             </div>
           ))}
         </article>
+      </section>
+
+      <section className="section">
+        <div className="section-head">
+          <div>
+            <div className="eyebrow">Guided live test</div>
+            <h2>Fechar o G3 sem escolher contato errado</h2>
+          </div>
+          <p>usa somente uma DM com challenge exato</p>
+        </div>
+        <div className="grid two">
+          <article className="card">
+            <div className="eyebrow">Passo 1</div>
+            <h2>Envie esta frase pela conta tester</h2>
+            <p>Depois que o webhook real for processado, a plataforma reconhecerá o challenge automaticamente.</p>
+            <div className="notice mono">{hostPassChallenge}</div>
+            <div className="key-value">
+              <span>Challenge inbound</span>
+              <strong className={challengeEvent ? "good" : "warn"}>{challengeEvent ? "OBSERVED" : "WAITING"}</strong>
+            </div>
+            {challengeEvent && (
+              <div className="key-value">
+                <span>Observed at</span>
+                <strong>{formatDate(challengeEvent.occurred_at)}</strong>
+              </div>
+            )}
+          </article>
+
+          <article className="card">
+            <div className="eyebrow">Passo 2</div>
+            <h2>Responder somente ao challenge verificado</h2>
+            <p>O botão busca a mensagem com a frase acima e enfileira uma única resposta idempotente para aquele sender. Ele nunca usa “último contato”.</p>
+            {challengeEvent && canHostPassReply ? (
+              <form action="/api/connections/instagram/readiness/send-test-reply" method="post">
+                <button className="button primary" type="submit">Enfileirar resposta HOST PASS</button>
+              </form>
+            ) : (
+              <button className="button" type="button" disabled>
+                {challengeEvent ? "Permissão insuficiente" : "Aguardando challenge real"}
+              </button>
+            )}
+            <p className="muted" style={{ marginTop: 12 }}>
+              O clique não marca PASS. O outbound worker ainda precisa receber um provider_message_id real da Meta.
+            </p>
+          </article>
+        </div>
       </section>
 
       <section className="section">
@@ -177,4 +249,21 @@ function attestationClass(status: string | null): string {
   if (status === "blocked") return "danger";
   if (status === "not_applicable") return "muted";
   return "warning";
+}
+
+function normalizeHostPassStatus(value: string | undefined): { message: string; tone: "" | "warning" } | null {
+  switch (value) {
+    case "reply_queued": return { message: "Resposta HOST PASS enfileirada. Aguarde o outbound worker e a evidência real da Meta; nenhum PASS foi forçado.", tone: "" };
+    case "reply_already_queued": return { message: "Este challenge já possui uma resposta HOST PASS enfileirada. A idempotência bloqueou duplicação.", tone: "" };
+    case "challenge_not_seen": return { message: "O challenge ainda não apareceu como message.received real. Envie a frase exata pela conta tester e aguarde o webhook.", tone: "warning" };
+    case "auth_invalid": return { message: "A conexão perdeu autorização. Reautorize o Instagram antes de responder ao challenge.", tone: "warning" };
+    case "recipient_not_observed": return { message: "O sender do challenge não foi reconhecido como identidade inbound verificada. Nenhuma mensagem foi enviada.", tone: "warning" };
+    case "connection_not_found": return { message: "A conexão oficial do challenge não está mais disponível. Nenhuma mensagem foi enviada.", tone: "warning" };
+    default: return null;
+  }
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString().replace("T", " ").replace(".000Z", "Z");
 }
