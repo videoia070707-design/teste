@@ -1,0 +1,47 @@
+services:
+  web:
+    build:
+      context: .
+      args:
+        SERVICE: "@automation/web"
+    env_file:
+      - .env
+    environment:
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  worker-ingress:
+    build:
+      context: .
+      args:
+        SERVICE: "@automation/worker-ingress"
+    env_file:
+      - .env
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+  worker-outbound:
+    build:
+      context: .
+      args:
+        SERVICE: "@automation/worker-outbound"
+    env_file:
+      - .env
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 60s
