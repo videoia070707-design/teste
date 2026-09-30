@@ -5,6 +5,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_credentials: "E-mail ou senha inválidos.",
   invalid_signup: "Use um e-mail válido e uma senha com pelo menos 8 caracteres.",
   signup_failed: "Não foi possível criar a conta.",
+  google_not_configured: "Login com Google ainda não foi habilitado neste ambiente.",
   google_oauth_failed: "Não foi possível iniciar o login com Google.",
   auth_callback: "Não foi possível concluir a autenticação. Tente novamente."
 };
@@ -17,6 +18,7 @@ export default async function LoginPage({
   const params = await searchParams;
   const errorCode = typeof params.error === "string" ? params.error : "";
   const status = typeof params.status === "string" ? params.status : "";
+  const googleAuthEnabled = process.env.GOOGLE_AUTH_ENABLED === "true";
 
   return (
     <div className="auth-page">
@@ -40,13 +42,20 @@ export default async function LoginPage({
           </div>
         )}
 
-        <form action={signInWithGoogle} className="auth-google-form">
-          <button className="button button-secondary" type="submit">
-            Continuar com Google
-          </button>
-        </form>
+        {googleAuthEnabled && (
+          <>
+            <form action={signInWithGoogle} className="auth-google-form">
+              <button className="button button-secondary" type="submit">
+                Continuar com Google
+              </button>
+            </form>
+            <div className="auth-divider"><span>ou use e-mail</span></div>
+          </>
+        )}
 
-        <div className="auth-divider"><span>ou use e-mail</span></div>
+        {!googleAuthEnabled && (
+          <div className="auth-divider"><span>use e-mail</span></div>
+        )}
 
         <form action={signInWithEmail} className="auth-form">
           <label>
