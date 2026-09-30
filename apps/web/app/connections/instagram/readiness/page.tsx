@@ -94,12 +94,13 @@ export default async function InstagramReadinessPage({
         <article className="card">
           <div className="eyebrow">Provider URLs</div>
           <h2>Valores para o App Dashboard da Meta</h2>
-          <p>Derivados de APP_ORIGIN para impedir callback divergente entre ambientes.</p>
+          <p>Derivados da origem pública do web e da origem fixa do projeto Supabase para evitar callbacks divergentes.</p>
           <UrlRow label="App origin" value={report.urls.appOrigin} />
           <UrlRow label="OAuth redirect URI" value={report.urls.oauthRedirect} />
           <UrlRow label="Webhook callback" value={report.urls.webhookCallback} />
+          <UrlRow label="Data deletion callback" value={report.urls.dataDeletionCallback} />
           <UrlRow label="Privacy Policy" value={report.urls.privacyPolicy} />
-          <UrlRow label="Data deletion" value={report.urls.dataDeletion} />
+          <UrlRow label="Data deletion instructions" value={report.urls.dataDeletion} />
         </article>
       </section>
 
@@ -222,7 +223,7 @@ export default async function InstagramReadinessPage({
 
       <section className="section">
         <div className="notice">
-          G3 passa somente quando OAuth real, uma mensagem recebida real normalizada e uma resposta DM real com provider_message_id coexistem neste workspace. Webhook assinado é exibido separadamente para diagnóstico e continua obrigatório operacionalmente.
+          G3 passa somente quando OAuth real, uma mensagem recebida real normalizada e uma resposta DM real com provider_message_id coexistem neste workspace. Webhook assinado e Data Deletion aparecem separadamente para diagnóstico/compliance e continuam obrigatórios operacionalmente.
         </div>
       </section>
     </>
