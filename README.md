@@ -62,6 +62,8 @@ O OAuth atual solicita apenas as permissões usadas pelas capacidades implementa
 
 G3 **não deve ser marcado PASS apenas porque o código compila, o container sobe ou um checklist foi confirmado**. O status só muda quando as evidências de host real forem persistidas no workspace.
 
+Runbook operacional do teste real: `docs/g3-host-pass-runbook.md`.
+
 ## Runtime
 
 Processos long-lived:
