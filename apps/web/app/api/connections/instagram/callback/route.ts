@@ -59,7 +59,7 @@ export async function GET(request: Request): Promise<Response> {
   if (!code) return redirectToConnections("missing_code");
 
   const connectionStore = new PostgresConnectionStore(database);
-  const vault = getProviderSecretVault();
+  const vault = await getProviderSecretVault();
   let connectionId: string | null = null;
   let previousReference: StoredSecretReference | null = null;
   let newReference: StoredSecretReference | null = null;
