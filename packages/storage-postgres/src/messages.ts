@@ -19,6 +19,8 @@ export interface StoredOutboundMessage {
   providerMessageId: string | null;
   idempotencyKey: string;
   correlationId: string;
+  messageType: string;
+  dedupeResourceKey: string | null;
   deliveryState: StoredDeliveryState;
   reconciliationRequired: boolean;
   lastProviderTimestamp: string | null;
@@ -35,7 +37,12 @@ export class PostgresMessageStore {
     idempotencyKey: string;
     correlationId: string;
     payload: unknown;
-  }): Promise<{ message: StoredOutboundMessage; created: boolean }> {
+    messageType?: string;
+    dedupeResourceKey?: string;
+  }): Promise<{ message: StoredOutboundMessage; created: boolean; conflictKind?: "idempotency" | "resource_claim" }> {
+    const messageType = input.messageType ?? "text";
+    const dedupeResourceKey = input.dedupeResourceKey ?? null;
+
     const [created] = await this.sql<MessageRow[]>`
       insert into app_private.messages (
         workspace_id,
@@ -44,6 +51,7 @@ export class PostgresMessageStore {
         correlation_id,
         direction,
         message_type,
+        dedupe_resource_key,
         delivery_state,
         reconciliation_required,
         payload
@@ -53,12 +61,13 @@ export class PostgresMessageStore {
         ${input.idempotencyKey},
         ${input.correlationId},
         'outbound',
-        'text',
+        ${messageType},
+        ${dedupeResourceKey},
         'QUEUED',
         false,
         ${this.sql.json(asJsonValue(input.payload))}
       )
-      on conflict (connection_id, idempotency_key) do nothing
+      on conflict do nothing
       returning
         id,
         workspace_id,
@@ -66,6 +75,8 @@ export class PostgresMessageStore {
         provider_message_id,
         idempotency_key,
         correlation_id,
+        message_type,
+        dedupe_resource_key,
         delivery_state,
         reconciliation_required,
         last_provider_timestamp,
@@ -75,9 +86,17 @@ export class PostgresMessageStore {
 
     if (created) return { message: mapMessage(created), created: true };
 
-    const existing = await this.getByIdempotencyKey(input.connectionId, input.idempotencyKey);
-    if (!existing) throw new Error("MESSAGE_IDEMPOTENCY_CONFLICT_WITHOUT_ROW");
-    return { message: existing, created: false };
+    const byIdempotency = await this.getByIdempotencyKey(input.connectionId, input.idempotencyKey);
+    if (byIdempotency) {
+      return { message: byIdempotency, created: false, conflictKind: "idempotency" };
+    }
+
+    if (dedupeResourceKey) {
+      const byClaim = await this.getByResourceClaim(input.connectionId, messageType, dedupeResourceKey);
+      if (byClaim) return { message: byClaim, created: false, conflictKind: "resource_claim" };
+    }
+
+    throw new Error("MESSAGE_CONFLICT_WITHOUT_RESOLVABLE_ROW");
   }
 
   async markProcessing(messageId: string): Promise<StoredOutboundMessage> {
@@ -96,6 +115,8 @@ export class PostgresMessageStore {
         provider_message_id,
         idempotency_key,
         correlation_id,
+        message_type,
+        dedupe_resource_key,
         delivery_state,
         reconciliation_required,
         last_provider_timestamp,
@@ -132,6 +153,8 @@ export class PostgresMessageStore {
         provider_message_id,
         idempotency_key,
         correlation_id,
+        message_type,
+        dedupe_resource_key,
         delivery_state,
         reconciliation_required,
         last_provider_timestamp,
@@ -152,6 +175,8 @@ export class PostgresMessageStore {
         provider_message_id,
         idempotency_key,
         correlation_id,
+        message_type,
+        dedupe_resource_key,
         delivery_state,
         reconciliation_required,
         last_provider_timestamp,
@@ -160,6 +185,36 @@ export class PostgresMessageStore {
       from app_private.messages
       where connection_id = ${connectionId}
         and idempotency_key = ${idempotencyKey}
+      limit 1
+    `;
+
+    return row ? mapMessage(row) : null;
+  }
+
+  async getByResourceClaim(
+    connectionId: string,
+    messageType: string,
+    dedupeResourceKey: string
+  ): Promise<StoredOutboundMessage | null> {
+    const [row] = await this.sql<MessageRow[]>`
+      select
+        id,
+        workspace_id,
+        connection_id,
+        provider_message_id,
+        idempotency_key,
+        correlation_id,
+        message_type,
+        dedupe_resource_key,
+        delivery_state,
+        reconciliation_required,
+        last_provider_timestamp,
+        last_error_code,
+        payload
+      from app_private.messages
+      where connection_id = ${connectionId}
+        and message_type = ${messageType}
+        and dedupe_resource_key = ${dedupeResourceKey}
       limit 1
     `;
 
@@ -174,6 +229,8 @@ interface MessageRow {
   provider_message_id: string | null;
   idempotency_key: string;
   correlation_id: string;
+  message_type: string;
+  dedupe_resource_key: string | null;
   delivery_state: StoredDeliveryState;
   reconciliation_required: boolean;
   last_provider_timestamp: string | null;
@@ -189,6 +246,8 @@ function mapMessage(row: MessageRow): StoredOutboundMessage {
     providerMessageId: row.provider_message_id,
     idempotencyKey: row.idempotency_key,
     correlationId: row.correlation_id,
+    messageType: row.message_type,
+    dedupeResourceKey: row.dedupe_resource_key,
     deliveryState: row.delivery_state,
     reconciliationRequired: row.reconciliation_required,
     lastProviderTimestamp: row.last_provider_timestamp,
