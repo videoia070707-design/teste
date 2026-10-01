@@ -1,0 +1,75 @@
+name: Local Windows Package
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'TESTAR-FERRAMENTA-WINDOWS.cmd'
+      - 'PARAR-FERRAMENTA-WINDOWS.cmd'
+      - 'TESTE-LOCAL-WINDOWS.md'
+      - 'scripts/windows/**'
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'database/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/local-windows-package.yml'
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Windows PowerShell syntax
+        shell: powershell
+        run: |
+          .\scripts\windows\Test-PowerShellSyntax.ps1 -DirectoryPath .\scripts\windows
+
+      - name: Validate launchers exist
+        shell: powershell
+        run: |
+          $required = @(
+            '.\TESTAR-FERRAMENTA-WINDOWS.cmd',
+            '.\PARAR-FERRAMENTA-WINDOWS.cmd',
+            '.\TESTE-LOCAL-WINDOWS.md',
+            '.\scripts\windows\Start-Local-Test.ps1',
+            '.\scripts\windows\Stop-Local-Test.ps1'
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Arquivo obrigatorio ausente: $path"
+            }
+          }
+
+      - name: Assemble source snapshot
+        shell: powershell
+        run: |
+          $stage = Join-Path $PWD 'staging\Automation-Platform-Local-Windows'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+          Get-ChildItem -LiteralPath $PWD -Force | Where-Object {
+            $_.Name -notin @('.git', 'staging', 'node_modules', '.next', 'Relatorios-Teste-Local')
+          } | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination $stage -Recurse -Force
+          }
+
+          @(
+            'AUTOMATION PLATFORM - LOCAL WINDOWS PACKAGE',
+            "Commit: $env:GITHUB_SHA",
+            "Built: $([DateTime]::UtcNow.ToString('o'))",
+            'Entry point: TESTAR-FERRAMENTA-WINDOWS.cmd',
+            'Stop: PARAR-FERRAMENTA-WINDOWS.cmd'
+          ) | Set-Content -LiteralPath (Join-Path $stage 'PACKAGE_BUILD.txt') -Encoding UTF8
+
+      - name: Upload local Windows ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: Automation-Platform-Local-Windows
+          path: staging/Automation-Platform-Local-Windows
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 9
+          retention-days: 7
