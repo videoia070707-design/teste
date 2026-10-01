@@ -8,13 +8,19 @@ on:
       - 'PARAR-FERRAMENTA-WINDOWS.cmd'
       - 'TESTE-LOCAL-WINDOWS.md'
       - 'scripts/windows/**'
-      - 'apps/web/**'
+      - 'apps/**'
       - 'packages/**'
       - 'database/**'
+      - 'supabase/**'
+      - 'docs/**'
       - 'package.json'
       - 'pnpm-lock.yaml'
       - 'pnpm-workspace.yaml'
-      - '.github/workflows/local-windows-package.yml'
+      - 'Dockerfile'
+      - 'compose.yaml'
+      - 'render.yaml'
+      - '.env.example'
+      - '.github/workflows/**'
   workflow_dispatch:
 
 jobs:
@@ -60,6 +66,7 @@ jobs:
             'AUTOMATION PLATFORM - LOCAL WINDOWS PACKAGE',
             "Commit: $env:GITHUB_SHA",
             "Built: $([DateTime]::UtcNow.ToString('o'))",
+            'Scope: full repository snapshot including apps, packages, database, Supabase runtime, docs and CI',
             'Entry point: TESTAR-FERRAMENTA-WINDOWS.cmd',
             'Stop: PARAR-FERRAMENTA-WINDOWS.cmd'
           ) | Set-Content -LiteralPath (Join-Path $stage 'PACKAGE_BUILD.txt') -Encoding UTF8
