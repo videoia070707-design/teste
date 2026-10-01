@@ -3,6 +3,7 @@ import { can, type WorkspaceRole } from "@automation/core";
 import { PostgresMessageStore } from "@automation/storage-postgres/messages";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
+import { isTrustedMutationRequest } from "@/lib/server/request-security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,13 @@ const MESSAGE_TYPES: Record<CommentAction, string> = {
 };
 
 export async function POST(request: Request): Promise<Response> {
+  if (!isTrustedMutationRequest(request, process.env.APP_ORIGIN)) {
+    return Response.json(
+      { error: "cross_origin_request_forbidden" },
+      { status: 403, headers: { "cache-control": "no-store" } }
+    );
+  }
+
   const { userId, membership } = await requireWorkspaceContext();
   if (!can(membership.role as WorkspaceRole, "conversation.reply")) {
     return Response.json({ error: "forbidden" }, { status: 403 });
