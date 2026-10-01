@@ -2,6 +2,7 @@ import { can, type WorkspaceRole } from "@automation/core";
 import { NextResponse } from "next/server";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
+import { isTrustedMutationRequest } from "@/lib/server/request-security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,7 +19,7 @@ interface SetupInput {
 }
 
 export async function POST(request: Request): Promise<Response> {
-  if (!isTrustedMutationRequest(request)) {
+  if (!isTrustedMutationRequest(request, process.env.APP_ORIGIN)) {
     return Response.json(
       { error: "cross_origin_request_forbidden" },
       { status: 403, headers: { "cache-control": "no-store" } }
@@ -154,25 +155,6 @@ function validationCode(error: unknown): string {
   if (!(error instanceof Error)) return "INVALID_CONFIGURATION";
   const code = error.message.trim().toUpperCase().replace(/[^A-Z0-9_]+/g, "_");
   return code || "INVALID_CONFIGURATION";
-}
-
-function isTrustedMutationRequest(request: Request): boolean {
-  const expectedOrigin = getAppOrigin(request);
-  const origin = request.headers.get("origin");
-  if (origin) return normalizeOrigin(origin) === expectedOrigin;
-
-  const referer = request.headers.get("referer");
-  if (referer) return normalizeOrigin(referer) === expectedOrigin;
-
-  return false;
-}
-
-function normalizeOrigin(value: string): string | null {
-  try {
-    return new URL(value).origin;
-  } catch {
-    return null;
-  }
 }
 
 function getAppOrigin(request: Request): string {
