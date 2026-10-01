@@ -86,10 +86,12 @@ Os dois precisam responder `200` antes de qualquer configuração Meta.
 
 ## 6. Configurar Supabase Auth
 
-Com a URL final do Render, atualize no Supabase Auth:
+Com a URL final do Render, atualize **Authentication → URL Configuration** no Supabase:
 
-- **Site URL** = origem HTTPS do Render;
-- **Redirect URLs** = inclua a origem/rotas usadas pelo callback de Auth da aplicação.
+- **Site URL** = `https://<render-host>`
+- **Redirect URL de produção** = `https://<render-host>/auth/callback`
+
+Use a URL exata em produção. O callback Next.js real da aplicação é `/auth/callback` e faz a troca PKCE com `exchangeCodeForSession` antes de redirecionar internamente.
 
 Google OAuth permanece desabilitado (`GOOGLE_AUTH_ENABLED=false`) até o provider Google ser configurado de verdade. Email/senha continua sendo o caminho inicial.
 
