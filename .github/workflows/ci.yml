@@ -254,6 +254,40 @@ jobs:
             exception
               when unique_violation then null;
             end;
+
+            perform app_private.set_platform_public_config('legal_entity_name', 'CI Operator');
+            perform app_private.set_platform_public_config('support_email', 'ci@example.test');
+            perform app_private.set_instagram_platform_config(
+              '1234567890',
+              'https://example.test/oauth/authorize',
+              'https://example.test/oauth/token',
+              'multipart',
+              'https://example.test/oauth/long-lived',
+              '/me?fields=id,username'
+            );
+
+            if not exists (
+              select 1
+              from app_private.platform_public_config
+              where config_key = 'support_email'
+                and config_value = 'ci@example.test'
+            ) then
+              raise exception 'portable Setup Center public config bridge failed';
+            end if;
+
+            if not exists (
+              select 1
+              from app_private.provider_runtime_config
+              where provider_key = 'instagram.meta.official'
+                and app_id = '1234567890'
+                and oauth_authorize_url = 'https://example.test/oauth/authorize'
+                and oauth_token_url = 'https://example.test/oauth/token'
+                and oauth_token_encoding = 'multipart'
+                and long_lived_token_url = 'https://example.test/oauth/long-lived'
+                and identity_probe_path = '/me?fields=id,username'
+            ) then
+              raise exception 'portable provider runtime config contract failed';
+            end if;
           end
           $$;
           SQL
