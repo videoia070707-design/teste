@@ -37,6 +37,7 @@ jobs:
             011_worker_heartbeats.sql
             012_foreign_key_indexes.sql
             021_meta_compliance.sql
+            025_platform_public_config.sql
           )
           mapfile -t actual < <(find database -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
           test "${#actual[@]}" -eq "${#expected[@]}"
@@ -66,6 +67,7 @@ jobs:
             022_meta_webhook_verify_token.sql
             023_instagram_platform_config.sql
             024_worker_heartbeats_primary_key.sql
+            025_platform_public_config.sql
           )
           mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
           test "${#actual[@]}" -eq "${#expected[@]}"
@@ -75,6 +77,10 @@ jobs:
 
           cmp --silent database/021_meta_compliance.sql supabase/migrations/021_meta_compliance.sql || {
             echo 'Portable migration 021 drifted between database/ and supabase/migrations/.' >&2
+            exit 1
+          }
+          cmp --silent database/025_platform_public_config.sql supabase/migrations/025_platform_public_config.sql || {
+            echo 'Portable migration 025 drifted between database/ and supabase/migrations/.' >&2
             exit 1
           }
 
