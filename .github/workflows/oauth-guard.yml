@@ -68,17 +68,17 @@ jobs:
           psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           do $$
           declare
-            actor_id uuid := gen_random_uuid();
-            workspace_id uuid;
-            affected integer;
-            consumed timestamptz;
+            v_actor_id uuid := gen_random_uuid();
+            v_workspace_id uuid;
+            v_affected integer;
+            v_consumed timestamptz;
           begin
             insert into auth.users (id, email)
-            values (actor_id, 'oauth-guard@example.test');
+            values (v_actor_id, 'oauth-guard@example.test');
 
             insert into app_private.workspaces (name)
             values ('OAuth Guard CI')
-            returning id into workspace_id;
+            returning id into v_workspace_id;
 
             insert into app_private.oauth_sessions (
               workspace_id,
@@ -87,8 +87,8 @@ jobs:
               state_hash,
               expires_at
             ) values (
-              workspace_id,
-              actor_id,
+              v_workspace_id,
+              v_actor_id,
               'instagram.meta.official',
               repeat('c', 64),
               now() + interval '10 minutes'
@@ -99,36 +99,36 @@ jobs:
             where provider = 'instagram.meta.official'
               and state_hash = repeat('c', 64)
               and consumed_at is null;
-            get diagnostics affected = row_count;
-            if affected <> 0 then
+            get diagnostics v_affected = row_count;
+            if v_affected <> 0 then
               raise exception 'OAuth state was consumed without owner/admin membership';
             end if;
 
-            select consumed_at into consumed
+            select consumed_at into v_consumed
             from app_private.oauth_sessions
             where provider = 'instagram.meta.official'
               and state_hash = repeat('c', 64);
-            if consumed is not null then
+            if v_consumed is not null then
               raise exception 'suppressed OAuth state unexpectedly persisted consumed_at';
             end if;
 
             insert into app_private.workspace_members (workspace_id, user_id, role)
-            values (workspace_id, actor_id, 'owner');
+            values (v_workspace_id, v_actor_id, 'owner');
 
             update app_private.oauth_sessions
             set consumed_at = now()
             where provider = 'instagram.meta.official'
               and state_hash = repeat('c', 64)
               and consumed_at is null;
-            get diagnostics affected = row_count;
-            if affected <> 1 then
+            get diagnostics v_affected = row_count;
+            if v_affected <> 1 then
               raise exception 'owner could not consume valid OAuth state';
             end if;
 
             update app_private.workspace_members
             set role = 'viewer'
-            where workspace_id = workspace_id
-              and user_id = actor_id;
+            where workspace_id = v_workspace_id
+              and user_id = v_actor_id;
 
             insert into app_private.oauth_sessions (
               workspace_id,
@@ -137,8 +137,8 @@ jobs:
               state_hash,
               expires_at
             ) values (
-              workspace_id,
-              actor_id,
+              v_workspace_id,
+              v_actor_id,
               'instagram.meta.official',
               repeat('d', 64),
               now() + interval '10 minutes'
@@ -149,8 +149,8 @@ jobs:
             where provider = 'instagram.meta.official'
               and state_hash = repeat('d', 64)
               and consumed_at is null;
-            get diagnostics affected = row_count;
-            if affected <> 0 then
+            get diagnostics v_affected = row_count;
+            if v_affected <> 0 then
               raise exception 'viewer was allowed to consume OAuth state';
             end if;
           end
