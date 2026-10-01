@@ -1,0 +1,48 @@
+name: Graph API Version Confirmation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web/app/settings/page.tsx'
+      - 'apps/web/app/api/settings/platform/route.ts'
+      - 'apps/web/lib/server/instagram-readiness.ts'
+      - 'database/031_graph_api_version_confirmation.sql'
+      - 'supabase/migrations/031_graph_api_version_confirmation.sql'
+      - '.github/workflows/graph-version-confirmation.yml'
+  pull_request:
+    paths:
+      - 'apps/web/app/settings/page.tsx'
+      - 'apps/web/app/api/settings/platform/route.ts'
+      - 'apps/web/lib/server/instagram-readiness.ts'
+      - 'database/031_graph_api_version_confirmation.sql'
+      - 'supabase/migrations/031_graph_api_version_confirmation.sql'
+      - '.github/workflows/graph-version-confirmation.yml'
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate explicit Graph version confirmation path
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          grep -q 'name="confirmGraphApiVersion"' apps/web/app/settings/page.tsx
+          grep -q 'graph_api_version_confirmed_at' apps/web/app/settings/page.tsx
+
+          grep -q 'confirmGraphApiVersion' apps/web/app/api/settings/platform/route.ts
+          grep -q '\${input.graphApiVersion}' apps/web/app/api/settings/platform/route.ts
+          grep -q 'graphApiVersionConfirmed' apps/web/app/api/settings/platform/route.ts
+
+          grep -q 'graph_version_confirmed' apps/web/lib/server/instagram-readiness.ts
+          grep -q 'graphApiVersionConfirmedAt' apps/web/lib/server/instagram-readiness.ts
+          grep -q 'graph_api_version_confirmed_at' apps/web/lib/server/instagram-readiness.ts
+
+          grep -q 'graph_api_version_confirmed_at' database/031_graph_api_version_confirmation.sql
+          cmp --silent \
+            database/031_graph_api_version_confirmation.sql \
+            supabase/migrations/031_graph_api_version_confirmation.sql
+
+          echo 'Graph API version requires explicit operator confirmation across UI, POST, readiness, and migration.'
