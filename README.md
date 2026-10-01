@@ -59,6 +59,8 @@ O repositório contém `render.yaml` para um único web service gratuito. O web 
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fvideoia070707-design%2Fteste)
 
+Runbook sem custos/sem envio de senha pelo chat: [`docs/render-free-web.md`](docs/render-free-web.md).
+
 O botão acima apenas abre a revisão do Blueprint na conta Render. O `render.yaml` continua sendo a fonte de verdade e os gates de CI impedem recursos pagos ou workers no G3 Free.
 
 O Blueprint do Render foi reduzido deliberadamente. Ele não recebe App ID, endpoints Instagram, Graph version ou secrets Meta.
