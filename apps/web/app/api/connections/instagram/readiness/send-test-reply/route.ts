@@ -7,6 +7,7 @@ import {
   INSTAGRAM_HOST_PASS_REPLY_TEXT
 } from "@/lib/server/instagram-host-pass";
 import { queueInstagramTextReply } from "@/lib/server/instagram-messaging";
+import { isTrustedMutationRequest } from "@/lib/server/request-security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +15,13 @@ export const dynamic = "force-dynamic";
 const PROVIDER_KEY = "instagram.meta.official";
 
 export async function POST(request: Request): Promise<Response> {
+  if (!isTrustedMutationRequest(request, process.env.APP_ORIGIN)) {
+    return Response.json(
+      { error: "cross_origin_request_forbidden" },
+      { status: 403, headers: { "cache-control": "no-store" } }
+    );
+  }
+
   const { userId, membership } = await requireWorkspaceContext();
   const role = membership.role as WorkspaceRole;
   if (!can(role, "connections.manage") || !can(role, "conversation.reply")) {
