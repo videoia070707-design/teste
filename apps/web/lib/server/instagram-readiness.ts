@@ -4,6 +4,7 @@ import type { DatabaseClient } from "@automation/storage-postgres";
 import { getPlatformSecrets } from "@/lib/server/platform-secrets";
 
 const PROVIDER_KEY = "instagram.meta.official";
+const EDGE_OAUTH_CALLBACK_PATH = "/functions/v1/instagram-oauth-callback";
 const EDGE_WEBHOOK_PATH = "/functions/v1/instagram-webhook";
 const EDGE_DATA_DELETION_PATH = "/functions/v1/instagram-data-deletion";
 const EDGE_LEGAL_PATH = "/functions/v1/platform-legal";
@@ -81,7 +82,9 @@ export async function buildInstagramReadinessReport(
 
   const urls = {
     appOrigin: origin,
-    oauthRedirect: origin ? `${origin}/api/connections/instagram/callback` : null,
+    oauthRedirect: supabaseOrigin
+      ? `${supabaseOrigin}${EDGE_OAUTH_CALLBACK_PATH}`
+      : origin ? `${origin}/api/connections/instagram/callback` : null,
     webhookCallback: supabaseOrigin ? `${supabaseOrigin}${EDGE_WEBHOOK_PATH}` : null,
     dataDeletionCallback: supabaseOrigin ? `${supabaseOrigin}${EDGE_DATA_DELETION_PATH}` : null,
     privacyPolicy: supabaseOrigin ? `${supabaseOrigin}${EDGE_LEGAL_PATH}?document=privacy` : null,
@@ -89,7 +92,7 @@ export async function buildInstagramReadinessReport(
   };
 
   const configuration: ReadinessCheck[] = [
-    envCheck("app_origin", "APP_ORIGIN", validPublicOrigin(process.env.APP_ORIGIN), "Origem canônica do dashboard e callback OAuth."),
+    envCheck("app_origin", "APP_ORIGIN", validPublicOrigin(process.env.APP_ORIGIN), "Origem canônica do dashboard e fallback portátil do OAuth."),
     envCheck("supabase_url", "NEXT_PUBLIC_SUPABASE_URL", validHttpsUrl(process.env.NEXT_PUBLIC_SUPABASE_URL), "Origem do Supabase Auth e dos callbacks Edge sempre disponíveis."),
     envCheck("supabase_key", "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", present(process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY), "Publishable key usada somente com Auth/RLS apropriados."),
     envCheck("database", "DATABASE_URL", present(process.env.DATABASE_URL), "PostgreSQL server-only do web app."),
