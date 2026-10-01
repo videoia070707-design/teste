@@ -18,16 +18,66 @@ Because those surfaces are independent from `APP_ORIGIN`, the Next.js dashboard 
 
 ## Local dashboard contract
 
-Use:
+Start from the committed template:
+
+```bash
+cp apps/web/.env.local.example apps/web/.env.local
+```
+
+The template pins the safe/public values and leaves only the least-privilege database password as a local placeholder. The resulting `.env.local` is ignored by Git and must never be committed.
+
+The effective contract is:
 
 ```text
 APP_ORIGIN=http://localhost:3000
-NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<publishable-key>
-DATABASE_URL=<Supavisor connection using automation_web role>
+NEXT_PUBLIC_SUPABASE_URL=https://cqtrigqlktekczbbsxiy.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=<project publishable key>
+GOOGLE_AUTH_ENABLED=false
+DATABASE_URL=postgresql://automation_web.cqtrigqlktekczbbsxiy:<local-password>@aws-0-sa-east-1.pooler.supabase.com:5432/postgres?sslmode=require
+```
+
+Provider secrets are deliberately absent from the local env. `META_APP_SECRET`, webhook verify token and provider AES keyring live in Supabase Vault.
+
+Before starting Next.js, run:
+
+```bash
+pnpm hostpass:check
+```
+
+The checker fails closed when:
+
+- the password placeholder was not replaced;
+- a different project/role/pooler is used;
+- TLS is missing;
+- `APP_ORIGIN` is not the expected local origin;
+- a Vault-owned provider secret leaked back into `.env.local`.
+
+Then start the dashboard:
+
+```bash
+pnpm dev
 ```
 
 For a normal long-lived local Node process, Session Pooler `5432` is appropriate. If the dashboard is later moved to a serverless host, use Supavisor Transaction Pooler `6543`; the web database client already disables prepared statements and defaults to a one-connection application pool for transaction mode.
+
+## Setup Center
+
+After authenticating, open:
+
+`Settings → Setup Center`
+
+Owner/Admin can configure:
+
+- legal/operator name;
+- support/privacy email;
+- Meta App ID;
+- OAuth authorize/token URLs after they are confirmed against the real Meta App/current official documentation;
+- token encoding;
+- long-lived token URL;
+- identity probe path;
+- **Meta App Secret through a password/write-only field**.
+
+The Meta App Secret is sent server-side directly to the allowlisted `app_private.set_meta_app_secret()` bridge and stored in Supabase Vault. It is never pre-filled or rendered back. Leaving the field blank preserves the current secret. AuditLog records only that the secret field changed, never the secret value.
 
 ## Important consequence
 
