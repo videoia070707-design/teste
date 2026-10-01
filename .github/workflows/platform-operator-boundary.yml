@@ -50,21 +50,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'isPlatformOperator' apps/web/app/settings/page.tsx
-          grep -q 'platform_operator_required' apps/web/app/api/settings/platform-operator/route.ts
-          grep -q 'set_platform_public_config(\${userId}' apps/web/app/api/settings/platform-operator/route.ts
-          grep -q 'set_instagram_platform_config(' apps/web/app/api/settings/platform-operator/route.ts
-          grep -q '\${userId},' apps/web/app/api/settings/platform-operator/route.ts
-          grep -q 'set_meta_app_secret(\${userId}' apps/web/app/api/settings/platform-operator/route.ts
-          grep -q 'export { POST } from "../platform-operator/route"' apps/web/app/api/settings/platform/route.ts
+          grep -Fq 'isPlatformOperator' apps/web/app/settings/page.tsx
+          grep -Fq 'platform_operator_required' apps/web/app/api/settings/platform-operator/route.ts
+          grep -Fq 'set_platform_public_config(${userId}' apps/web/app/api/settings/platform-operator/route.ts
+          grep -Fq 'set_instagram_platform_config(' apps/web/app/api/settings/platform-operator/route.ts
+          grep -Fq '${userId},' apps/web/app/api/settings/platform-operator/route.ts
+          grep -Fq 'set_meta_app_secret(${userId}' apps/web/app/api/settings/platform-operator/route.ts
+          grep -Fq 'export { POST } from "../platform-operator/route"' apps/web/app/api/settings/platform/route.ts
 
       - name: Validate Supabase-only secret guard shape
         shell: bash
         run: |
           set -euo pipefail
-          grep -q 'require_platform_operator(p_actor_user_id)' supabase/migrations/034_platform_operator_meta_secret_guard.sql
-          grep -q 'revoke execute on function app_private.set_meta_app_secret(text) from automation_web' supabase/migrations/034_platform_operator_meta_secret_guard.sql
-          grep -q 'grant execute on function app_private.set_meta_app_secret(uuid, text) to automation_web' supabase/migrations/034_platform_operator_meta_secret_guard.sql
+          grep -Fq 'require_platform_operator(p_actor_user_id)' supabase/migrations/034_platform_operator_meta_secret_guard.sql
+          grep -Fq 'revoke execute on function app_private.set_meta_app_secret(text) from automation_web' supabase/migrations/034_platform_operator_meta_secret_guard.sql
+          grep -Fq 'grant execute on function app_private.set_meta_app_secret(uuid, text) to automation_web' supabase/migrations/034_platform_operator_meta_secret_guard.sql
 
       - name: Prepare portable database stubs
         shell: bash
