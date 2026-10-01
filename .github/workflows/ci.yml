@@ -222,6 +222,54 @@ jobs:
               true
             ) returning id into connection_id;
 
+            -- A seeded Graph version is deliberately NOT sufficient. Prove the
+            -- database rejects a provider side effect until the operator makes
+            -- an explicit confirmation through the 7-argument config bridge.
+            begin
+              insert into app_private.messages (
+                workspace_id,
+                connection_id,
+                idempotency_key,
+                correlation_id,
+                direction,
+                message_type,
+                delivery_state,
+                payload
+              ) values (
+                workspace_id,
+                connection_id,
+                'ci-unconfirmed-graph-version',
+                gen_random_uuid(),
+                'outbound',
+                'text',
+                'QUEUED',
+                '{}'::jsonb
+              );
+              raise exception 'Instagram outbound was accepted before Graph API version confirmation';
+            exception
+              when check_violation then null;
+            end;
+
+            perform app_private.set_instagram_platform_config(
+              null,
+              'v26.0',
+              null,
+              null,
+              null,
+              null,
+              null
+            );
+
+            if not exists (
+              select 1
+              from app_private.provider_runtime_config
+              where provider_key = 'instagram.meta.official'
+                and graph_api_version = 'v26.0'
+                and graph_api_version_confirmed_at is not null
+            ) then
+              raise exception 'Graph API version confirmation was not persisted';
+            end if;
+
             insert into app_private.messages (
               workspace_id,
               connection_id,
@@ -301,6 +349,8 @@ jobs:
                 and oauth_token_encoding = 'multipart'
                 and long_lived_token_url = 'https://example.test/oauth/long-lived'
                 and identity_probe_path = '/ci/identity-probe'
+                and graph_api_version = 'v26.0'
+                and graph_api_version_confirmed_at is not null
             ) then
               raise exception 'portable provider runtime config contract failed';
             end if;
