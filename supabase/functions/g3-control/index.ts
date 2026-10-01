@@ -14,6 +14,7 @@ interface MembershipRow {
 interface ReadinessRow {
   edge_runtime_fresh: boolean;
   app_id: boolean;
+  graph_api_version_confirmed: boolean;
   meta_app_secret: boolean;
   webhook_verify_token: boolean;
   provider_keyring: boolean;
@@ -33,6 +34,7 @@ interface SetupInput {
   legalEntityName: string | null;
   supportEmail: string | null;
   appId: string | null;
+  graphApiVersion: string | null;
   metaAppSecret: string | null;
   oauthAuthorizeUrl: string | null;
   oauthTokenUrl: string | null;
@@ -108,6 +110,7 @@ Deno.serve(async (request: Request) => {
         await tx`select app_private.set_platform_public_config('support_email', ${input.supportEmail})`;
         await tx`select app_private.set_instagram_platform_config(
           ${input.appId},
+          ${input.graphApiVersion},
           ${input.oauthAuthorizeUrl},
           ${input.oauthTokenUrl},
           ${input.oauthTokenEncoding},
@@ -139,6 +142,7 @@ Deno.serve(async (request: Request) => {
                 "legal_entity_name",
                 "support_email",
                 "app_id",
+                "graph_api_version",
                 "oauth_authorize_url",
                 "oauth_token_url",
                 "oauth_token_encoding",
@@ -159,7 +163,8 @@ Deno.serve(async (request: Request) => {
           name: membership.workspace_name,
           role: membership.role
         },
-        metaAppSecretChanged: input.metaAppSecret !== null
+        metaAppSecretChanged: input.metaAppSecret !== null,
+        graphApiVersionConfirmed: input.graphApiVersion !== null
       }, 200, cors);
     }
 
@@ -234,6 +239,13 @@ async function buildStatus(
         where provider_key = ${PROVIDER_KEY}
           and nullif(btrim(app_id), '') is not null
       ) as app_id,
+      exists (
+        select 1
+        from app_private.provider_runtime_config
+        where provider_key = ${PROVIDER_KEY}
+          and nullif(btrim(graph_api_version), '') is not null
+          and graph_api_version_confirmed_at is not null
+      ) as graph_api_version_confirmed,
       app_private.get_platform_secret('meta_app_secret') is not null as meta_app_secret,
       app_private.get_platform_secret('meta_webhook_verify_token') is not null as webhook_verify_token,
       app_private.get_platform_secret('provider_secret_keyring') is not null as provider_keyring,
@@ -317,6 +329,7 @@ async function buildStatus(
 
   const configurationReady = state.edge_runtime_fresh
     && state.app_id
+    && state.graph_api_version_confirmed
     && state.meta_app_secret
     && state.webhook_verify_token
     && state.provider_keyring
@@ -340,6 +353,7 @@ async function buildStatus(
     configuration: {
       edgeRuntime: state.edge_runtime_fresh,
       metaAppId: state.app_id,
+      graphApiVersion: state.graph_api_version_confirmed,
       metaAppSecret: state.meta_app_secret,
       webhookVerifyToken: state.webhook_verify_token,
       providerKeyring: state.provider_keyring,
@@ -393,6 +407,7 @@ async function parseSetupRequest(request: Request): Promise<
         legalEntityName: optionalString(body.legalEntityName, 200),
         supportEmail: optionalEmail(body.supportEmail),
         appId: optionalPattern(body.appId, /^[0-9]{4,40}$/),
+        graphApiVersion: optionalPattern(body.graphApiVersion, /^v[0-9]{1,3}\.[0-9]{1,3}$/),
         metaAppSecret: optionalSecret(body.metaAppSecret),
         oauthAuthorizeUrl: optionalHttpsUrl(body.oauthAuthorizeUrl),
         oauthTokenUrl: optionalHttpsUrl(body.oauthTokenUrl),
