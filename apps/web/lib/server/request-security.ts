@@ -1,5 +1,3 @@
-import "server-only";
-
 export function isTrustedMutationRequest(request: Request, configuredOrigin?: string): boolean {
   const expectedOrigin = resolveExpectedOrigin(request, configuredOrigin);
   const origin = request.headers.get("origin");
