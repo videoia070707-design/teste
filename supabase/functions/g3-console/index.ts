@@ -5,10 +5,11 @@ const MAX_PROXY_BODY_BYTES = 16_384;
 
 Deno.serve(async (request: Request) => {
   const url = new URL(request.url);
-  const basePath = `/functions/v1/g3-console`;
-  const relativePath = url.pathname.startsWith(basePath)
-    ? url.pathname.slice(basePath.length) || "/"
-    : "/";
+  const relativePath = url.pathname.endsWith("/api/status")
+    ? "/api/status"
+    : url.pathname.endsWith("/api/setup")
+      ? "/api/setup"
+      : "/";
 
   if (request.method === "GET" && relativePath === "/") {
     return renderConsole();
