@@ -1,0 +1,54 @@
+name: G3 Console
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/g3-console/**'
+      - 'scripts/g3-console-server.mjs'
+      - 'package.json'
+      - '.github/workflows/g3-console.yml'
+  pull_request:
+    paths:
+      - 'tools/g3-console/**'
+      - 'scripts/g3-console-server.mjs'
+      - 'package.json'
+      - '.github/workflows/g3-console.yml'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Enable Corepack
+        run: corepack enable
+      - name: Prepare pnpm
+        run: corepack prepare pnpm@9.15.4 --activate
+      - name: Start local G3 Console
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm g3:console >/tmp/g3-console.log 2>&1 &
+          echo $! >/tmp/g3-console.pid
+      - name: Smoke test console
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'kill "$(cat /tmp/g3-console.pid)" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent --show-error http://127.0.0.1:3000/ >/tmp/g3-console.html; then
+              break
+            fi
+            if [ "$attempt" -eq 20 ]; then
+              cat /tmp/g3-console.log
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -q '<title>G3 Console — Instagram Official</title>' /tmp/g3-console.html
+          grep -q 'Supabase Free control plane' /tmp/g3-console.html
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/not-found)" = "404"
+          curl --silent --head http://127.0.0.1:3000/ | grep -qi '^cache-control: no-store'
