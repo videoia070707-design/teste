@@ -6,6 +6,7 @@ import { getPlatformSecrets } from "@/lib/server/platform-secrets";
 const PROVIDER_KEY = "instagram.meta.official";
 const EDGE_WEBHOOK_PATH = "/functions/v1/instagram-webhook";
 const EDGE_DATA_DELETION_PATH = "/functions/v1/instagram-data-deletion";
+const EDGE_LEGAL_PATH = "/functions/v1/platform-legal";
 
 export type ReadinessState = "READY" | "BLOCKED" | "EXTERNAL";
 
@@ -43,6 +44,11 @@ interface ProviderRuntimeReadiness {
   identityProbePath: string | null;
 }
 
+interface PlatformPublicReadiness {
+  legalEntityName: string | null;
+  supportEmail: string | null;
+}
+
 const EXTERNAL_CHECKS = [
   ["meta_business_app_created", "Meta Business app criado"],
   ["instagram_professional_test_account", "Conta Instagram Business/Creator de teste pronta"],
@@ -61,6 +67,7 @@ export async function buildInstagramReadinessReport(
   const supabaseOrigin = parseHttpsOrigin(process.env.NEXT_PUBLIC_SUPABASE_URL);
   const platformSecrets = await readPlatformSecretReadiness(sql);
   const providerConfig = await readProviderRuntimeReadiness(sql);
+  const publicConfig = await readPlatformPublicReadiness(sql);
 
   const appId = firstConfigured(providerConfig.appId, process.env.META_APP_ID);
   const oauthAuthorizeUrl = firstConfigured(providerConfig.oauthAuthorizeUrl, process.env.INSTAGRAM_OAUTH_AUTHORIZE_URL);
@@ -69,14 +76,16 @@ export async function buildInstagramReadinessReport(
   const graphBaseUrl = firstConfigured(providerConfig.graphBaseUrl, process.env.INSTAGRAM_GRAPH_BASE_URL);
   const graphApiVersion = firstConfigured(providerConfig.graphApiVersion, process.env.INSTAGRAM_GRAPH_API_VERSION);
   const identityProbePath = firstConfigured(providerConfig.identityProbePath, process.env.INSTAGRAM_IDENTITY_PROBE_PATH);
+  const legalEntityName = firstConfigured(publicConfig.legalEntityName, process.env.LEGAL_ENTITY_NAME);
+  const supportEmail = firstConfigured(publicConfig.supportEmail, process.env.SUPPORT_EMAIL);
 
   const urls = {
     appOrigin: origin,
     oauthRedirect: origin ? `${origin}/api/connections/instagram/callback` : null,
     webhookCallback: supabaseOrigin ? `${supabaseOrigin}${EDGE_WEBHOOK_PATH}` : null,
     dataDeletionCallback: supabaseOrigin ? `${supabaseOrigin}${EDGE_DATA_DELETION_PATH}` : null,
-    privacyPolicy: origin ? `${origin}/legal/privacy` : null,
-    dataDeletion: origin ? `${origin}/legal/data-deletion` : null
+    privacyPolicy: supabaseOrigin ? `${supabaseOrigin}${EDGE_LEGAL_PATH}?document=privacy` : null,
+    dataDeletion: supabaseOrigin ? `${supabaseOrigin}${EDGE_LEGAL_PATH}?document=data-deletion` : null
   };
 
   const configuration: ReadinessCheck[] = [
@@ -105,8 +114,8 @@ export async function buildInstagramReadinessReport(
     envCheck("graph_version", "Instagram Graph API version", safeApiVersion(graphApiVersion), "Versão explícita; upgrades não são silenciosos."),
     envCheck("identity_probe", "Instagram identity probe", safeProbePath(identityProbePath), "Probe explícito necessário para health sem falso positivo."),
     envCheck("secret_keyring", "Provider AES keyring no Supabase Vault", platformSecrets.providerKeyringReady, "Keyring AES-256-GCM compartilhado pelo web e Edge runtime."),
-    envCheck("legal_entity", "LEGAL_ENTITY_NAME", present(process.env.LEGAL_ENTITY_NAME), "Nome do operador exibido nas páginas legais."),
-    envCheck("support_email", "SUPPORT_EMAIL", validEmail(process.env.SUPPORT_EMAIL), "Contato público para privacidade e exclusão de dados.")
+    envCheck("legal_entity", "Legal entity name", present(legalEntityName), "Produção lê app_private.platform_public_config; env é apenas fallback portátil."),
+    envCheck("support_email", "Support/privacy email", validEmail(supportEmail), "Produção lê app_private.platform_public_config; env é apenas fallback portátil.")
   ];
 
   const attestations = await sql<{
@@ -240,6 +249,23 @@ async function readProviderRuntimeReadiness(sql: DatabaseClient): Promise<Provid
     };
   } catch {
     return emptyProviderRuntimeReadiness();
+  }
+}
+
+async function readPlatformPublicReadiness(sql: DatabaseClient): Promise<PlatformPublicReadiness> {
+  try {
+    const rows = await sql<{ config_key: string; config_value: string | null }[]>`
+      select config_key, config_value
+      from app_private.platform_public_config
+      where config_key in ('legal_entity_name', 'support_email')
+    `;
+    const values = new Map(rows.map((row) => [row.config_key, row.config_value?.trim() || null]));
+    return {
+      legalEntityName: values.get("legal_entity_name") ?? null,
+      supportEmail: values.get("support_email") ?? null
+    };
+  } catch {
+    return { legalEntityName: null, supportEmail: null };
   }
 }
 
