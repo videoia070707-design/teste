@@ -308,3 +308,30 @@ jobs:
           docker build --build-arg SERVICE=@automation/web -t automation-web:ci .
           docker build --build-arg SERVICE=@automation/worker-ingress -t automation-ingress:ci .
           docker build --build-arg SERVICE=@automation/worker-outbound -t automation-outbound:ci .
+      - name: Smoke test web container on Render port
+        shell: bash
+        run: |
+          set -euo pipefail
+          container_id="$(docker run -d --rm \
+            --network host \
+            -e SERVICE=@automation/web \
+            -e PORT=10000 \
+            -e APP_ORIGIN=http://127.0.0.1:10000 \
+            -e DATABASE_URL="$TEST_DATABASE_URL" \
+            automation-web:ci)"
+          trap 'docker rm -f "$container_id" >/dev/null 2>&1 || true' EXIT
+
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:10000/api/health/live >/tmp/live.json; then
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              docker logs "$container_id"
+              exit 1
+            fi
+            sleep 1
+          done
+
+          curl --fail --silent --show-error http://127.0.0.1:10000/api/health/ready >/tmp/ready.json
+          grep -q '"status":"ok"' /tmp/live.json
+          grep -q '"status":"ready"' /tmp/ready.json
