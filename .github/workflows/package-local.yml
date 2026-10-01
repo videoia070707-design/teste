@@ -1,0 +1,41 @@
+name: Package Local Snapshot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/package-local.yml
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Prepare clean local snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/automation-platform-local
+          rsync -a \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude '.next' \
+            --exclude 'dist' \
+            --exclude 'coverage' \
+            ./ /tmp/automation-platform-local/
+          printf 'repository=videoia070707-design/teste\ncommit=%s\ngenerated_at=%s\n' \
+            "$GITHUB_SHA" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            > /tmp/automation-platform-local/LOCAL-SNAPSHOT.txt
+
+      - name: Upload complete local package
+        uses: actions/upload-artifact@v4
+        with:
+          name: automation-platform-full-local
+          path: /tmp/automation-platform-local
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
