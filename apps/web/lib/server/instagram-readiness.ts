@@ -43,6 +43,7 @@ interface ProviderRuntimeReadiness {
   longLivedTokenUrl: string | null;
   graphBaseUrl: string | null;
   graphApiVersion: string | null;
+  graphApiVersionConfirmedAt: string | null;
   identityProbePath: string | null;
 }
 
@@ -146,7 +147,15 @@ export async function buildInstagramReadinessReport(
       "graph_version",
       "Instagram Graph API version",
       safeApiVersion(providerConfig.graphApiVersion),
-      "Versão explícita; upgrades não são silenciosos."
+      "Versão explícita e sintaticamente válida."
+    ),
+    configCheck(
+      "graph_version_confirmed",
+      "Graph API version confirmation",
+      safeApiVersion(providerConfig.graphApiVersion) && present(providerConfig.graphApiVersionConfirmedAt),
+      providerConfig.graphApiVersionConfirmedAt
+        ? `Confirmação explícita registrada em ${formatTimestamp(providerConfig.graphApiVersionConfirmedAt)}.`
+        : "A versão armazenada ainda não foi confirmada explicitamente pelo operador no Setup Center."
     ),
     configCheck(
       "identity_probe",
@@ -280,6 +289,7 @@ async function readProviderRuntimeReadiness(sql: DatabaseClient): Promise<Provid
       long_lived_token_url: string | null;
       graph_base_url: string | null;
       graph_api_version: string | null;
+      graph_api_version_confirmed_at: string | null;
       identity_probe_path: string | null;
     }[]>`
       select
@@ -290,6 +300,7 @@ async function readProviderRuntimeReadiness(sql: DatabaseClient): Promise<Provid
         long_lived_token_url,
         graph_base_url,
         graph_api_version,
+        graph_api_version_confirmed_at,
         identity_probe_path
       from app_private.provider_runtime_config
       where provider_key = ${PROVIDER_KEY}
@@ -304,6 +315,7 @@ async function readProviderRuntimeReadiness(sql: DatabaseClient): Promise<Provid
       longLivedTokenUrl: row?.long_lived_token_url ?? null,
       graphBaseUrl: row?.graph_base_url ?? null,
       graphApiVersion: row?.graph_api_version ?? null,
+      graphApiVersionConfirmedAt: row?.graph_api_version_confirmed_at ?? null,
       identityProbePath: row?.identity_probe_path ?? null
     };
   } catch {
@@ -353,6 +365,7 @@ function emptyProviderRuntimeReadiness(): ProviderRuntimeReadiness {
     longLivedTokenUrl: null,
     graphBaseUrl: null,
     graphApiVersion: null,
+    graphApiVersionConfirmedAt: null,
     identityProbePath: null
   };
 }
@@ -465,6 +478,11 @@ function validVaultProviderKeyring(raw: string | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString().replace("T", " ").replace(".000Z", "Z");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
