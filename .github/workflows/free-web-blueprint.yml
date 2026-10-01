@@ -50,13 +50,15 @@ jobs:
             INSTAGRAM_OAUTH_TOKEN_URL
             INSTAGRAM_OAUTH_TOKEN_ENCODING
             INSTAGRAM_LONG_LIVED_TOKEN_URL
+            LEGAL_ENTITY_NAME
+            SUPPORT_EMAIL
           ]
           leaked = keys & forbidden
-          abort "Vault/database-owned provider config leaked back into Render config: #{leaked.inspect}" unless leaked.empty?
+          abort "Supabase-owned provider/legal config leaked back into Render config: #{leaked.inspect}" unless leaked.empty?
 
           required = %w[
             SERVICE APP_ORIGIN NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-            DATABASE_URL DATABASE_POOL_MAX LEGAL_ENTITY_NAME SUPPORT_EMAIL
+            DATABASE_URL DATABASE_POOL_MAX
           ]
           missing = required - keys
           abort "required web env declarations missing: #{missing.inspect}" unless missing.empty?
