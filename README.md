@@ -35,7 +35,7 @@ Projeto Supabase Free do G3:
 - região: `sa-east-1`;
 - PostgreSQL 17;
 - core portátil `database/001–012` + `021_meta_compliance.sql`;
-- adapter Supabase Free `supabase/migrations/013–023`;
+- adapter Supabase Free `supabase/migrations/013–026`;
 - dados do produto isolados em `app_private`;
 - `anon` e `authenticated` sem acesso direto ao schema privado;
 - role web dedicada `automation_web` com least privilege;
@@ -81,14 +81,17 @@ O workflow **Free Web Blueprint** impede provider config/secrets de voltarem par
 Dois streams permanecem separados:
 
 - `database/001–012` + `021`: schema PostgreSQL portátil;
-- `supabase/migrations/013–023`: adapter do runtime hospedado gratuito.
+- `supabase/migrations/013–026`: adapter do runtime hospedado gratuito.
 
 Destaques recentes:
 
 - 020 — role `automation_web` least-privilege;
 - 021 — Meta compliance/data deletion;
 - 022 — verify token do webhook gerado no Vault;
-- 023 — App ID/endpoints OAuth/Graph config/identity probe centralizados em `provider_runtime_config`.
+- 023 — App ID/endpoints OAuth/Graph config/identity probe centralizados em `provider_runtime_config`;
+- 024 — chave primária estável dos heartbeats;
+- 025 — configuração pública das superfícies legais;
+- 026 — guard de consumo OAuth por membership/role.
 
 A migration 023 não preenche endpoints OAuth por suposição. Valores dependentes do App Meta real permanecem nulos até validação explícita.
 
@@ -212,7 +215,7 @@ Runbook: `docs/g3-host-pass-runbook.md`.
 - `supabase/functions/g3-runtime`: executor gratuito
 - `supabase/functions/instagram-webhook`: callback Meta
 - `supabase/functions/instagram-data-deletion`: compliance
-- `supabase/migrations`: adapter Supabase Free 013–023
+- `supabase/migrations`: adapter Supabase Free 013–026
 - `apps/worker-ingress`: fallback Docker
 - `apps/worker-outbound`: fallback Docker
 - `packages/core`: domínio/RBAC
