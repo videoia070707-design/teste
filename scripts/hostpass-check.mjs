@@ -87,7 +87,7 @@ function validateDatabaseUrl(raw) {
     return;
   }
 
-  if (!['postgres:', 'postgresql:'].includes(url.protocol)) {
+  if (!["postgres:", "postgresql:"].includes(url.protocol)) {
     errors.push("DATABASE_URL must use postgres:// or postgresql://.");
   }
   if (decodeURIComponent(url.username) !== "automation_web.cqtrigqlktekczbbsxiy") {
@@ -103,13 +103,16 @@ function validateDatabaseUrl(raw) {
     errors.push("DATABASE_URL database must be postgres.");
   }
   const sslmode = url.searchParams.get("sslmode")?.toLowerCase();
-  if (!['require', 'verify-ca', 'verify-full'].includes(sslmode ?? "")) {
+  if (!["require", "verify-ca", "verify-full"].includes(sslmode ?? "")) {
     errors.push("DATABASE_URL must set sslmode=require, verify-ca, or verify-full.");
   }
-  if (!url.password) {
+  const decodedPassword = decodeURIComponent(url.password || "");
+  if (!decodedPassword) {
     errors.push("DATABASE_URL must include the automation_web password locally.");
+  } else if (decodedPassword === "<AUTOMATION_WEB_PASSWORD>" || /AUTOMATION_WEB_PASSWORD/i.test(decodedPassword)) {
+    errors.push("DATABASE_URL still contains the example password placeholder.");
   }
-  if (url.searchParams.get("sslmode") === "require") {
+  if (sslmode === "require") {
     notes.push("sslmode=require accepted for HOST PASS; verify-full remains the stronger production target");
   }
 }
