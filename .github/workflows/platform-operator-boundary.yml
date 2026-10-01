@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          grep -Fq 'isPlatformOperator' apps/web/app/settings/page.tsx
+          grep -Fq 'app_private.is_platform_operator(${userId})' apps/web/app/settings/page.tsx
           grep -Fq 'platform_operator_required' apps/web/app/api/settings/platform-operator/route.ts
           grep -Fq 'set_platform_public_config(${userId}' apps/web/app/api/settings/platform-operator/route.ts
           grep -Fq 'set_instagram_platform_config(' apps/web/app/api/settings/platform-operator/route.ts
