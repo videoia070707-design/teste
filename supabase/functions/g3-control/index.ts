@@ -5,13 +5,29 @@ import postgres from "npm:postgres@3.4.9";
 const PROVIDER_KEY = "instagram.meta.official";
 const MAX_SETUP_BODY_BYTES = 16_384;
 
+type Sql = ReturnType<typeof postgres>;
+
 interface MembershipRow {
   workspace_id: string;
   workspace_name: string;
   role: string;
 }
 
+interface SetupInput {
+  legalEntityName: string | null;
+  supportEmail: string | null;
+  appId: string | null;
+  graphApiVersion: string | null;
+  metaAppSecret: string | null;
+  oauthAuthorizeUrl: string | null;
+  oauthTokenUrl: string | null;
+  oauthTokenEncoding: "multipart" | "urlencoded";
+  longLivedTokenUrl: string | null;
+  identityProbePath: string | null;
+}
+
 interface ReadinessRow {
+  platform_operator: boolean;
   edge_runtime_fresh: boolean;
   app_id: boolean;
   graph_api_version_confirmed: boolean;
@@ -30,52 +46,45 @@ interface ReadinessRow {
   outbound_live: boolean;
 }
 
-interface SetupInput {
-  legalEntityName: string | null;
-  supportEmail: string | null;
-  appId: string | null;
-  graphApiVersion: string | null;
-  metaAppSecret: string | null;
-  oauthAuthorizeUrl: string | null;
-  oauthTokenUrl: string | null;
-  oauthTokenEncoding: "multipart" | "urlencoded";
-  longLivedTokenUrl: string | null;
-  identityProbePath: string | null;
-}
-
 Deno.serve(async (request: Request) => {
   const cors = corsHeaders(request);
 
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: cors });
   }
-  if (!originAllowed(request)) return json({ error: "origin_not_allowed" }, 403, cors);
+  if (!originAllowed(request)) {
+    return json({ error: "origin_not_allowed" }, 403, cors);
+  }
 
   const url = new URL(request.url);
   const isStatus = request.method === "GET" && url.pathname.endsWith("/status");
   const isSetup = request.method === "POST" && url.pathname.endsWith("/setup");
-  if (!isStatus && !isSetup) return json({ error: "not_found" }, 404, cors);
+  if (!isStatus && !isSetup) {
+    return json({ error: "not_found" }, 404, cors);
+  }
 
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) {
     return json({ error: "authentication_required" }, 401, cors);
   }
 
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")?.trim();
   const publishableKey = defaultPublishableKey();
-  const databaseUrl = Deno.env.get("SUPABASE_DB_URL");
+  const databaseUrl = Deno.env.get("SUPABASE_DB_URL")?.trim();
   if (!supabaseUrl || !publishableKey || !databaseUrl) {
     return json({ error: "runtime_not_configured" }, 503, cors);
   }
 
-  const token = authorization.slice("Bearer ".length).trim();
   const authClient = createClient(supabaseUrl, publishableKey, {
     global: { headers: { Authorization: authorization } },
     auth: { persistSession: false, autoRefreshToken: false }
   });
+  const token = authorization.slice("Bearer ".length).trim();
   const { data: userData, error: userError } = await authClient.auth.getUser(token);
   const user = userData.user;
-  if (userError || !user) return json({ error: "authentication_invalid" }, 401, cors);
+  if (userError || !user) {
+    return json({ error: "authentication_invalid" }, 401, cors);
+  }
 
   const sql = postgres(databaseUrl, {
     max: 1,
@@ -90,15 +99,41 @@ Deno.serve(async (request: Request) => {
       return json({ error: "admin_role_required" }, 403, cors);
     }
 
-    if (isSetup) {
-      const parsed = await parseSetupRequest(request);
-      if (!parsed.ok) return json({ error: parsed.error }, 400, cors);
-      const input = parsed.value;
+    if (isStatus) {
+      return await buildStatus(sql, membership, user.id, cors);
+    }
 
-      await sql.begin(async (tx) => {
-        await tx`select app_private.set_platform_public_config('legal_entity_name', ${input.legalEntityName})`;
-        await tx`select app_private.set_platform_public_config('support_email', ${input.supportEmail})`;
-        await tx`select app_private.set_instagram_platform_config(
+    const [operator] = await sql<{ allowed: boolean }[]>`
+      select app_private.is_platform_operator(${user.id}::uuid) as allowed
+    `;
+    if (!operator?.allowed) {
+      return json({ error: "platform_operator_required" }, 403, cors);
+    }
+
+    const parsed = await parseSetupRequest(request);
+    if (!parsed.ok) {
+      return json({ error: parsed.error }, 400, cors);
+    }
+    const input = parsed.value;
+
+    await sql.begin(async (tx) => {
+      await tx`
+        select app_private.set_platform_public_config(
+          ${user.id}::uuid,
+          'legal_entity_name',
+          ${input.legalEntityName}
+        )
+      `;
+      await tx`
+        select app_private.set_platform_public_config(
+          ${user.id}::uuid,
+          'support_email',
+          ${input.supportEmail}
+        )
+      `;
+      await tx`
+        select app_private.set_instagram_platform_config(
+          ${user.id}::uuid,
           ${input.appId},
           ${input.graphApiVersion},
           ${input.oauthAuthorizeUrl},
@@ -106,63 +141,74 @@ Deno.serve(async (request: Request) => {
           ${input.oauthTokenEncoding},
           ${input.longLivedTokenUrl},
           ${input.identityProbePath}
-        )`;
+        )
+      `;
 
-        if (input.metaAppSecret !== null) {
-          await tx`select app_private.set_meta_app_secret(${input.metaAppSecret})`;
-        }
-
+      if (input.metaAppSecret !== null) {
         await tx`
-          insert into app_private.audit_logs (
-            workspace_id, actor_user_id, action, resource_type, resource_id, metadata
-          ) values (
-            ${membership.workspace_id},
-            ${user.id},
-            'platform.setup.edge.updated',
-            'platform_configuration',
-            ${PROVIDER_KEY},
-            ${tx.json({
-              source: "g3-control",
-              graphApiVersionConfirmed: input.graphApiVersion !== null,
-              metaAppSecretChanged: input.metaAppSecret !== null,
-              identityProbeConfigured: input.identityProbePath !== null
-            })}
+          select app_private.set_meta_app_secret(
+            ${user.id}::uuid,
+            ${input.metaAppSecret}
           )
         `;
-      });
+      }
 
-      return json({
-        updated: true,
-        workspace: {
-          id: membership.workspace_id,
-          name: membership.workspace_name,
-          role: membership.role
-        },
-        metaAppSecretChanged: input.metaAppSecret !== null,
-        graphApiVersionConfirmed: input.graphApiVersion !== null
-      }, 200, cors);
-    }
+      await tx`
+        insert into app_private.audit_logs (
+          workspace_id,
+          actor_user_id,
+          action,
+          resource_type,
+          resource_id,
+          metadata
+        ) values (
+          ${membership.workspace_id},
+          ${user.id},
+          'platform.setup.edge.updated',
+          'platform_configuration',
+          ${PROVIDER_KEY},
+          ${tx.json({
+            source: "g3-control",
+            actorBoundary: "platform_operator",
+            graphApiVersionConfirmed: input.graphApiVersion !== null,
+            metaAppSecretChanged: input.metaAppSecret !== null,
+            identityProbeConfigured: input.identityProbePath !== null
+          })}
+        )
+      `;
+    });
 
-    return await buildStatus(sql, membership, cors);
+    return json({
+      updated: true,
+      workspace: {
+        id: membership.workspace_id,
+        name: membership.workspace_name,
+        role: membership.role
+      },
+      platformOperator: true,
+      metaAppSecretChanged: input.metaAppSecret !== null,
+      graphApiVersionConfirmed: input.graphApiVersion !== null
+    }, 200, cors);
   } catch (error) {
-    console.error("g3-control request failed", error instanceof Error ? error.message : "unknown");
+    console.error("g3-control request failed", safeErrorCode(error));
     return json({ error: "control_plane_unavailable" }, 503, cors);
   } finally {
     await sql.end({ timeout: 1 });
   }
 });
 
-async function ensureWorkspaceMembership(
-  sql: ReturnType<typeof postgres>,
-  userId: string
-): Promise<MembershipRow> {
+async function ensureWorkspaceMembership(sql: Sql, userId: string): Promise<MembershipRow> {
   return await sql.begin(async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
 
     const [existing] = await tx<MembershipRow[]>`
-      select membership.workspace_id, workspace.name as workspace_name, membership.role
+      select
+        membership.workspace_id,
+        workspace.name as workspace_name,
+        membership.role
       from app_private.workspace_members membership
-      join app_private.workspaces workspace on workspace.id = membership.workspace_id
+      join app_private.workspaces workspace
+        on workspace.id = membership.workspace_id
       where membership.user_id = ${userId}
       order by membership.created_at asc, membership.workspace_id asc
       limit 1
@@ -180,29 +226,39 @@ async function ensureWorkspaceMembership(
       insert into app_private.workspace_members (workspace_id, user_id, role)
       values (${workspace.id}, ${userId}, 'owner')
     `;
-    return { workspace_id: workspace.id, workspace_name: workspace.name, role: "owner" };
+
+    return {
+      workspace_id: workspace.id,
+      workspace_name: workspace.name,
+      role: "owner"
+    };
   });
 }
 
 async function buildStatus(
-  sql: ReturnType<typeof postgres>,
+  sql: Sql,
   membership: MembershipRow,
+  userId: string,
   cors: HeadersInit
 ): Promise<Response> {
   const [state] = await sql<ReadinessRow[]>`
     select
+      app_private.is_platform_operator(${userId}::uuid) as platform_operator,
       exists (
-        select 1 from app_private.worker_heartbeats
+        select 1
+        from app_private.worker_heartbeats
         where coalesce(worker_kind, service) = 'supabase_g3_runtime'
           and last_seen_at >= now() - interval '45 seconds'
       ) as edge_runtime_fresh,
       exists (
-        select 1 from app_private.provider_runtime_config
+        select 1
+        from app_private.provider_runtime_config
         where provider_key = ${PROVIDER_KEY}
           and nullif(btrim(app_id), '') is not null
       ) as app_id,
       exists (
-        select 1 from app_private.provider_runtime_config
+        select 1
+        from app_private.provider_runtime_config
         where provider_key = ${PROVIDER_KEY}
           and nullif(btrim(graph_api_version), '') is not null
           and graph_api_version_confirmed_at is not null
@@ -243,7 +299,8 @@ async function buildStatus(
       exists (
         select 1
         from app_private.channel_connections connection
-        join app_private.connection_secret_refs secret_ref on secret_ref.connection_id = connection.id
+        join app_private.connection_secret_refs secret_ref
+          on secret_ref.connection_id = connection.id
         where connection.workspace_id = ${membership.workspace_id}
           and connection.provider_key = ${PROVIDER_KEY}
           and connection.provider_mode = 'official'
@@ -265,7 +322,8 @@ async function buildStatus(
       exists (
         select 1
         from app_private.messages message
-        join app_private.channel_connections connection on connection.id = message.connection_id
+        join app_private.channel_connections connection
+          on connection.id = message.connection_id
         where message.workspace_id = ${membership.workspace_id}
           and connection.provider_key = ${PROVIDER_KEY}
           and connection.provider_mode = 'official'
@@ -275,11 +333,11 @@ async function buildStatus(
           and message.provider_message_id is not null
       ) as outbound_live
   `;
-  if (!state) return json({ error: "status_unavailable" }, 503, cors);
 
-  // Identity probe is intentionally NOT an OAuth precondition. It remains a
-  // health diagnostic: without a documented/validated probe the connection
-  // cannot become HEALTHY, but real OAuth/inbound/outbound HOST PASS may proceed.
+  if (!state) {
+    return json({ error: "status_unavailable" }, 503, cors);
+  }
+
   const oauthConfigurationReady = state.edge_runtime_fresh
     && state.app_id
     && state.graph_api_version_confirmed
@@ -292,18 +350,17 @@ async function buildStatus(
     && state.legal_entity
     && state.support_email;
 
-  const hostPass = state.oauth_live && state.inbound_live && state.outbound_live;
-
   return json({
     workspace: {
       id: membership.workspace_id,
       name: membership.workspace_name,
       role: membership.role
     },
+    platformOperator: state.platform_operator,
     configurationReady: oauthConfigurationReady,
     oauthConfigurationReady,
     healthProbeReady: state.identity_probe,
-    hostPass,
+    hostPass: state.oauth_live && state.inbound_live && state.outbound_live,
     configuration: {
       edgeRuntime: state.edge_runtime_fresh,
       metaAppId: state.app_id,
@@ -351,7 +408,10 @@ async function parseSetupRequest(request: Request): Promise<
   } catch {
     return { ok: false, error: "invalid_json_body" };
   }
-  if (!isRecord(body)) return { ok: false, error: "invalid_json_body" };
+
+  if (!isRecord(body)) {
+    return { ok: false, error: "invalid_json_body" };
+  }
 
   try {
     return {
@@ -370,7 +430,10 @@ async function parseSetupRequest(request: Request): Promise<
       }
     };
   } catch (error) {
-    return { ok: false, error: validationCode(error) };
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "FIELD_FORMAT_INVALID"
+    };
   }
 }
 
@@ -384,62 +447,56 @@ function optionalString(value: unknown, maxLength: number): string | null {
 }
 
 function optionalEmail(value: unknown): string | null {
-  const valueString = optionalString(value, 320);
-  if (valueString === null) return null;
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valueString)) throw new Error("SUPPORT_EMAIL_INVALID");
-  return valueString;
+  const normalized = optionalString(value, 320);
+  if (normalized === null) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+    throw new Error("SUPPORT_EMAIL_INVALID");
+  }
+  return normalized;
 }
 
 function optionalPattern(value: unknown, pattern: RegExp): string | null {
-  const valueString = optionalString(value, 200);
-  if (valueString === null) return null;
-  if (!pattern.test(valueString)) throw new Error("FIELD_FORMAT_INVALID");
-  return valueString;
+  const normalized = optionalString(value, 200);
+  if (normalized === null) return null;
+  if (!pattern.test(normalized)) throw new Error("FIELD_FORMAT_INVALID");
+  return normalized;
 }
 
 function optionalSecret(value: unknown): string | null {
-  const valueString = optionalString(value, 512);
-  if (valueString === null) return null;
-  if (valueString.length < 16) throw new Error("META_APP_SECRET_INVALID_LENGTH");
-  return valueString;
+  const normalized = optionalString(value, 512);
+  if (normalized === null) return null;
+  if (normalized.length < 16) throw new Error("META_APP_SECRET_INVALID_LENGTH");
+  return normalized;
 }
 
 function optionalHttpsUrl(value: unknown): string | null {
-  const valueString = optionalString(value, 2_000);
-  if (valueString === null) return null;
+  const normalized = optionalString(value, 2_000);
+  if (normalized === null) return null;
   let url: URL;
   try {
-    url = new URL(valueString);
+    url = new URL(normalized);
   } catch {
-    throw new Error("URL_INVALID");
+    throw new Error("HTTPS_URL_INVALID");
   }
-  if (url.protocol !== "https:") throw new Error("HTTPS_URL_REQUIRED");
+  if (url.protocol !== "https:") throw new Error("HTTPS_URL_INVALID");
   return url.toString();
 }
 
-function tokenEncoding(value: unknown): "multipart" | "urlencoded" {
-  if (value === undefined || value === null || value === "" || value === "multipart") return "multipart";
-  if (value === "urlencoded") return "urlencoded";
-  throw new Error("OAUTH_TOKEN_ENCODING_INVALID");
-}
-
 function optionalProbePath(value: unknown): string | null {
-  const valueString = optionalString(value, 500);
-  if (valueString === null) return null;
-  if (!valueString.startsWith("/") || valueString.startsWith("//") || valueString.includes("\\")) {
+  const normalized = optionalString(value, 500);
+  if (normalized === null) return null;
+  if (!normalized.startsWith("/") || normalized.startsWith("//") || normalized.includes("\\")) {
     throw new Error("IDENTITY_PROBE_PATH_INVALID");
   }
-  return valueString;
+  return normalized;
 }
 
-function validationCode(error: unknown): string {
-  if (!(error instanceof Error)) return "INVALID_CONFIGURATION";
-  const code = error.message.trim().toUpperCase().replace(/[^A-Z0-9_]+/g, "_");
-  return code || "INVALID_CONFIGURATION";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function tokenEncoding(value: unknown): "multipart" | "urlencoded" {
+  if (value === undefined || value === null || value === "") return "multipart";
+  if (value !== "multipart" && value !== "urlencoded") {
+    throw new Error("OAUTH_TOKEN_ENCODING_INVALID");
+  }
+  return value;
 }
 
 function defaultPublishableKey(): string | null {
@@ -450,7 +507,7 @@ function defaultPublishableKey(): string | null {
       const value = parsed.default;
       if (typeof value === "string" && value) return value;
     } catch {
-      // Fall through to hosted legacy anon key.
+      // Fall through to the hosted legacy anon key.
     }
   }
   return Deno.env.get("SUPABASE_ANON_KEY") ?? null;
@@ -459,10 +516,13 @@ function defaultPublishableKey(): string | null {
 function originAllowed(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return true;
+
   try {
-    const url = new URL(origin);
-    return url.protocol === "http:"
-      && (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1");
+    const parsed = new URL(origin);
+    if (parsed.protocol === "http:" && isLocalHostname(parsed.hostname)) return true;
+
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    return Boolean(supabaseUrl && parsed.origin === new URL(supabaseUrl).origin);
   } catch {
     return false;
   }
@@ -470,9 +530,9 @@ function originAllowed(request: Request): boolean {
 
 function corsHeaders(request: Request): HeadersInit {
   const origin = request.headers.get("origin");
-  const allowed = origin && originAllowed(request) ? origin : "null";
+  const allowedOrigin = origin && originAllowed(request) ? origin : "null";
   return {
-    "access-control-allow-origin": allowed,
+    "access-control-allow-origin": allowedOrigin,
     "access-control-allow-methods": "GET, POST, OPTIONS",
     "access-control-allow-headers": "authorization, apikey, content-type",
     "cache-control": "no-store",
@@ -480,9 +540,31 @@ function corsHeaders(request: Request): HeadersInit {
   };
 }
 
+function isLocalHostname(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function safeErrorCode(error: unknown): string {
+  if (!(error instanceof Error)) return "UNKNOWN_ERROR";
+  const normalized = error.message
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return normalized.slice(0, 120) || "UNKNOWN_ERROR";
+}
+
 function json(body: unknown, status: number, headers: HeadersInit): Response {
   return Response.json(body, {
     status,
-    headers: { ...headers, "content-type": "application/json; charset=utf-8" }
+    headers: {
+      ...headers,
+      "content-type": "application/json; charset=utf-8",
+      "x-content-type-options": "nosniff",
+      "referrer-policy": "no-referrer"
+    }
   });
 }
