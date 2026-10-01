@@ -57,6 +57,10 @@ Não há worker pago obrigatório no G3 atual.
 
 O repositório contém `render.yaml` para um único web service gratuito. O web hospeda dashboard/Auth/OAuth/legal, enquanto callbacks críticos do provider e runtime assíncrono continuam no Supabase.
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fvideoia070707-design%2Fteste)
+
+O botão acima apenas abre a revisão do Blueprint na conta Render. O `render.yaml` continua sendo a fonte de verdade e os gates de CI impedem recursos pagos ou workers no G3 Free.
+
 O Blueprint do Render foi reduzido deliberadamente. Ele não recebe App ID, endpoints Instagram, Graph version ou secrets Meta.
 
 Configuração necessária no serviço web:
