@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>G3 Console — Instagram Official</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b0d10;--panel:#12161b;--line:#252b33;--text:#f2f5f7;--muted:#8d98a5;--good:#69e59a;--warn:#ffc766;--bad:#ff7b7b;--accent:#8ca8ff}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,sans-serif}main{max-width:1080px;margin:0 auto;padding:40px 20px 80px}h1{font-size:36px;line-height:1.05;margin:8px 0 12px}h2{font-size:18px;margin:0 0 16px}.eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}p{color:var(--muted)}.grid{display:grid;gap:16px}.two{grid-template-columns:repeat(2,minmax(0,1fr))}.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px}.hidden{display:none!important}.row{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)}.row:last-child{border-bottom:0}.status{font:12px ui-monospace,SFMono-Regular,Menlo,monospace}.ok{color:var(--good)}.pending{color:var(--warn)}.error{color:var(--bad)}label{display:block;color:var(--muted);font-size:12px;margin:12px 0 6px}input,select{width:100%;background:#0d1116;color:var(--text);border:1px solid var(--line);border-radius:10px;padding:11px 12px;outline:none}input:focus,select:focus{border-color:var(--accent)}button{appearance:none;border:1px solid var(--line);border-radius:10px;padding:10px 14px;background:#1a2028;color:var(--text);cursor:pointer;font-weight:650}button.primary{background:var(--accent);color:#0a0d12;border-color:transparent}button:disabled{opacity:.5;cursor:not-allowed}.actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}.notice{padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#0d1116;color:var(--muted);margin:12px 0}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.top{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:24px}.pill{border:1px solid var(--line);border-radius:999px;padding:7px 10px;color:var(--muted);white-space:nowrap}.footer{margin-top:24px;color:var(--muted);font-size:12px}@media(max-width:760px){.two{grid-template-columns:1fr}.top{display:block}.pill{display:inline-block;margin-top:12px}}
+  </style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <div>
+      <div class="eyebrow">Supabase Free control plane</div>
+      <h1>G3 Console</h1>
+      <p>Setup e readiness do Instagram Official sem Render, worker pago ou DATABASE_URL no navegador.</p>
+    </div>
+    <div id="session-pill" class="pill">desconectado</div>
+  </div>
+
+  <section id="auth-card" class="card">
+    <div class="eyebrow">Authentication</div>
+    <h2>Entre na conta da plataforma</h2>
+    <div class="grid two">
+      <div><label for="email">E-mail</label><input id="email" type="email" autocomplete="email" /></div>
+      <div><label for="password">Senha</label><input id="password" type="password" minlength="8" autocomplete="current-password" /></div>
+    </div>
+    <div class="actions">
+      <button id="signin" class="primary">Entrar</button>
+      <button id="signup">Criar conta</button>
+    </div>
+    <div id="auth-message" class="notice hidden"></div>
+  </section>
+
+  <div id="control" class="hidden">
+    <section class="grid two">
+      <article class="card">
+        <div class="eyebrow">Configuration</div><h2>Readiness</h2><div id="config-status"></div>
+      </article>
+      <article class="card">
+        <div class="eyebrow">Live evidence</div><h2>HOST PASS</h2><div id="live-status"></div>
+      </article>
+    </section>
+
+    <section class="card" style="margin-top:16px">
+      <div class="eyebrow">Operator setup</div>
+      <h2>Meta + identidade pública</h2>
+      <p>Preencha todos os valores não-secretos confirmados para o App Meta real. O App Secret é write-only e nunca é carregado de volta.</p>
+      <div class="grid two">
+        <div><label for="legalEntityName">Nome jurídico / operador</label><input id="legalEntityName" maxlength="200" /></div>
+        <div><label for="supportEmail">E-mail de suporte / privacidade</label><input id="supportEmail" type="email" maxlength="320" /></div>
+        <div><label for="appId">Meta App ID</label><input id="appId" inputmode="numeric" pattern="[0-9]{4,40}" /></div>
+        <div><label for="metaAppSecret">Meta App Secret</label><input id="metaAppSecret" type="password" minlength="16" maxlength="512" autocomplete="new-password" placeholder="write-only; deixe vazio para não alterar" /></div>
+        <div><label for="oauthAuthorizeUrl">OAuth authorize URL</label><input id="oauthAuthorizeUrl" type="url" placeholder="https://..." /></div>
+        <div><label for="oauthTokenUrl">OAuth token URL</label><input id="oauthTokenUrl" type="url" placeholder="https://..." /></div>
+        <div><label for="longLivedTokenUrl">Long-lived token URL</label><input id="longLivedTokenUrl" type="url" placeholder="https://..." /></div>
+        <div><label for="identityProbePath">Identity probe path</label><input id="identityProbePath" placeholder="/path confirmado" /></div>
+        <div><label for="oauthTokenEncoding">OAuth token encoding</label><select id="oauthTokenEncoding"><option value="multipart">multipart</option><option value="urlencoded">urlencoded</option></select></div>
+      </div>
+      <div class="notice">Não copie endpoints do Instagram Basic Display legado. Grave somente valores confirmados para o Instagram API with Instagram Login do App Meta real.</div>
+      <div class="actions">
+        <button id="save-setup" class="primary">Salvar setup</button>
+        <button id="refresh-status">Atualizar status</button>
+        <button id="signout">Sair</button>
+      </div>
+      <div id="setup-message" class="notice hidden"></div>
+    </section>
+
+    <section class="card" style="margin-top:16px">
+      <div class="eyebrow">Public Meta surfaces</div><h2>URLs do projeto</h2>
+      <div class="row"><span>OAuth callback</span><span class="mono">https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/instagram-oauth-callback</span></div>
+      <div class="row"><span>Webhook callback</span><span class="mono">https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/instagram-webhook</span></div>
+      <div class="row"><span>Data deletion</span><span class="mono">https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/instagram-data-deletion</span></div>
+      <div class="row"><span>Privacy</span><span class="mono">https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/platform-legal?document=privacy</span></div>
+    </section>
+  </div>
+
+  <div class="footer">G3 Console é ferramenta de HOST PASS. Runtime saudável ou self-test nunca substitui OAuth, inbound real e outbound real.</div>
+</main>
+<script type="module">
+  import { createClient } from "https://esm.sh/@supabase/supabase-js@2.95.0";
+
+  const SUPABASE_URL = "https://cqtrigqlktekczbbsxiy.supabase.co";
+  const PUBLISHABLE_KEY = "sb_publishable_YvoQENFFqgNkiH2xZxBB5Q_vb0kNyS_";
+  const CONTROL_URL = `${SUPABASE_URL}/functions/v1/g3-control`;
+  const supabase = createClient(SUPABASE_URL, PUBLISHABLE_KEY, {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+  });
+
+  const $ = (id) => document.getElementById(id);
+  const configLabels = {
+    edgeRuntime: "Edge runtime",
+    metaAppId: "Meta App ID",
+    metaAppSecret: "Meta App Secret",
+    webhookVerifyToken: "Webhook verify token",
+    providerKeyring: "Provider AES keyring",
+    oauthAuthorizeUrl: "OAuth authorize URL",
+    oauthTokenUrl: "OAuth token URL",
+    longLivedTokenUrl: "Long-lived token URL",
+    identityProbe: "Identity probe",
+    legalEntity: "Legal entity",
+    supportEmail: "Support email"
+  };
+  const liveLabels = {
+    oauth: "OAuth real",
+    signedWebhook: "Webhook assinado",
+    inboundMessage: "message.received real",
+    outboundMessage: "DM outbound real"
+  };
+
+  $("signin").addEventListener("click", () => authenticate("signin"));
+  $("signup").addEventListener("click", () => authenticate("signup"));
+  $("signout").addEventListener("click", async () => { await supabase.auth.signOut(); await renderSession(); });
+  $("refresh-status").addEventListener("click", () => refreshStatus());
+  $("save-setup").addEventListener("click", () => saveSetup());
+
+  supabase.auth.onAuthStateChange(() => queueMicrotask(renderSession));
+  await renderSession();
+
+  async function authenticate(mode) {
+    setMessage("auth-message", "Processando…", false);
+    const email = $("email").value.trim();
+    const password = $("password").value;
+    if (!email || password.length < 8) return setMessage("auth-message", "Use e-mail válido e senha com pelo menos 8 caracteres.", true);
+
+    const result = mode === "signin"
+      ? await supabase.auth.signInWithPassword({ email, password })
+      : await supabase.auth.signUp({ email, password, options: { emailRedirectTo: window.location.origin } });
+
+    if (result.error) return setMessage("auth-message", result.error.message, true);
+    if (mode === "signup" && !result.data.session) {
+      return setMessage("auth-message", "Conta criada. Se a confirmação de e-mail estiver ativa, confirme e depois volte para entrar.", false);
+    }
+    setMessage("auth-message", "Autenticado.", false);
+    await renderSession();
+  }
+
+  async function renderSession() {
+    const { data } = await supabase.auth.getSession();
+    const session = data.session;
+    $("auth-card").classList.toggle("hidden", Boolean(session));
+    $("control").classList.toggle("hidden", !session);
+    $("session-pill").textContent = session?.user?.email ?? "desconectado";
+    if (session) await refreshStatus();
+  }
+
+  async function refreshStatus() {
+    const session = (await supabase.auth.getSession()).data.session;
+    if (!session) return;
+    try {
+      const response = await fetch(`${CONTROL_URL}/status`, {
+        headers: { Authorization: `Bearer ${session.access_token}`, apikey: PUBLISHABLE_KEY }
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+      renderBooleanRows("config-status", body.configuration ?? {}, configLabels);
+      renderBooleanRows("live-status", body.liveEvidence ?? {}, liveLabels);
+      $("session-pill").textContent = `${body.workspace?.name ?? "workspace"} · ${body.hostPass ? "G3 PASS" : "G3 IN PROGRESS"}`;
+    } catch (error) {
+      setMessage("setup-message", `Status indisponível: ${error instanceof Error ? error.message : "erro"}`, true);
+    }
+  }
+
+  async function saveSetup() {
+    const session = (await supabase.auth.getSession()).data.session;
+    if (!session) return;
+    setMessage("setup-message", "Salvando…", false);
+
+    const payload = {
+      legalEntityName: valueOrNull("legalEntityName"),
+      supportEmail: valueOrNull("supportEmail"),
+      appId: valueOrNull("appId"),
+      metaAppSecret: valueOrNull("metaAppSecret"),
+      oauthAuthorizeUrl: valueOrNull("oauthAuthorizeUrl"),
+      oauthTokenUrl: valueOrNull("oauthTokenUrl"),
+      oauthTokenEncoding: $("oauthTokenEncoding").value,
+      longLivedTokenUrl: valueOrNull("longLivedTokenUrl"),
+      identityProbePath: valueOrNull("identityProbePath")
+    };
+
+    try {
+      const response = await fetch(`${CONTROL_URL}/setup`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          apikey: PUBLISHABLE_KEY,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+      $("metaAppSecret").value = "";
+      setMessage("setup-message", body.metaAppSecretChanged ? "Setup salvo. App Secret gravado no Vault e removido do formulário." : "Setup salvo. App Secret existente foi preservado.", false);
+      await refreshStatus();
+    } catch (error) {
+      setMessage("setup-message", `Falha ao salvar: ${error instanceof Error ? error.message : "erro"}`, true);
+    }
+  }
+
+  function renderBooleanRows(targetId, values, labels) {
+    const target = $(targetId);
+    target.replaceChildren();
+    for (const [key, label] of Object.entries(labels)) {
+      const row = document.createElement("div"); row.className = "row";
+      const name = document.createElement("span"); name.textContent = label;
+      const state = document.createElement("strong");
+      const ready = Boolean(values[key]);
+      state.className = `status ${ready ? "ok" : "pending"}`;
+      state.textContent = ready ? "READY" : "PENDING";
+      row.append(name, state); target.append(row);
+    }
+  }
+
+  function valueOrNull(id) { const value = $(id).value.trim(); return value || null; }
+  function setMessage(id, text, isError) {
+    const node = $(id); node.textContent = text; node.classList.remove("hidden"); node.classList.toggle("error", Boolean(isError));
+  }
+</script>
+</body>
+</html>
