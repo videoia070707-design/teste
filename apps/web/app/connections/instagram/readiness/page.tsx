@@ -3,7 +3,11 @@ import { can, type WorkspaceRole } from "@automation/core";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
 import { buildInstagramHostPassChallenge } from "@/lib/server/instagram-host-pass";
-import { buildInstagramReadinessReport, type ReadinessState } from "@/lib/server/instagram-readiness";
+import {
+  buildInstagramReadinessReport,
+  type InstagramReadinessReport,
+  type ReadinessState
+} from "@/lib/server/instagram-readiness";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +40,8 @@ export default async function InstagramReadinessPage({
     order by event.occurred_at desc
     limit 1
   `;
+
+  const nextAction = deriveNextAction(report, Boolean(challengeEvent));
 
   return (
     <>
@@ -78,6 +84,22 @@ export default async function InstagramReadinessPage({
           {hostPassStatus.message}
         </div>
       )}
+
+      <section className="section">
+        <article className="card">
+          <div className="eyebrow">Próxima ação / {nextAction.stage}</div>
+          <h2>{nextAction.title}</h2>
+          <p>{nextAction.detail}</p>
+          <div className={`notice ${nextAction.tone === "warning" ? "warning" : ""}`}>
+            {nextAction.evidenceRule}
+          </div>
+          {nextAction.href && nextAction.cta && (
+            <div className="connection-actions" style={{ marginTop: 16 }}>
+              <Link className="button primary" href={nextAction.href}>{nextAction.cta}</Link>
+            </div>
+          )}
+        </article>
+      </section>
 
       <section className="section grid two">
         <article className="card">
@@ -229,6 +251,97 @@ export default async function InstagramReadinessPage({
       </section>
     </>
   );
+}
+
+type NextAction = {
+  stage: string;
+  title: string;
+  detail: string;
+  evidenceRule: string;
+  tone: "" | "warning";
+  href?: string;
+  cta?: string;
+};
+
+function deriveNextAction(report: InstagramReadinessReport, challengeObserved: boolean): NextAction {
+  if (report.hostPass) {
+    return {
+      stage: "Gate complete",
+      title: "G3 HOST PASS comprovado",
+      detail: "OAuth real, inbound real e outbound real com provider_message_id coexistem no workspace.",
+      evidenceRule: "O próximo gate pode ser iniciado sem reclassificar evidência manualmente.",
+      tone: ""
+    };
+  }
+
+  const blockedConfig = report.configuration.find((item) => item.state === "BLOCKED");
+  if (blockedConfig) {
+    return {
+      stage: "1 · Platform configuration",
+      title: `Resolver: ${blockedConfig.label}`,
+      detail: blockedConfig.detail,
+      evidenceRule: "Configuração estrutural não produz HOST PASS; ela apenas libera o próximo estágio seguro.",
+      tone: "warning",
+      href: "/settings",
+      cta: "Abrir Setup Center"
+    };
+  }
+
+  const externalBlocker = report.external.find(
+    (item) => item.attestationStatus !== "confirmed" && item.attestationStatus !== "not_applicable"
+  );
+  if (externalBlocker) {
+    return {
+      stage: "2 · Meta/App Dashboard",
+      title: externalBlocker.label,
+      detail: "Conclua esta configuração no ecossistema Meta e registre a attestation apenas depois de verificá-la.",
+      evidenceRule: "Attestation organiza a operação, mas nunca substitui OAuth/webhook/mensagem reais.",
+      tone: "warning"
+    };
+  }
+
+  const oauth = report.liveEvidence.find((item) => item.key === "oauth_live");
+  if (oauth?.state !== "READY") {
+    return {
+      stage: "3 · Live OAuth",
+      title: "Conectar uma conta Instagram Business/Creator real",
+      detail: "Execute o Instagram Login pela própria plataforma para produzir uma credencial criptografada vinculada ao workspace.",
+      evidenceRule: "Só a conexão real gravada pelo callback conta como evidência.",
+      tone: "warning",
+      href: "/api/connections/instagram/start",
+      cta: "Conectar Instagram"
+    };
+  }
+
+  const signedWebhook = report.liveEvidence.find((item) => item.key === "signed_webhook");
+  if (signedWebhook?.state !== "READY") {
+    return {
+      stage: "4 · Real webhook",
+      title: "Produzir o primeiro webhook assinado da Meta",
+      detail: "Com o callback já registrado, gere uma interação real na conta profissional e deixe o Edge validar HMAC + persistir antes do ACK.",
+      evidenceRule: "Self-test e challenge sintético não contam como tráfego Meta real.",
+      tone: "warning"
+    };
+  }
+
+  const inbound = report.liveEvidence.find((item) => item.key === "message_received");
+  if (inbound?.state !== "READY" || !challengeObserved) {
+    return {
+      stage: "5 · Real inbound",
+      title: "Enviar o challenge pela conta tester",
+      detail: "Envie a frase exata exibida em Guided live test. O sistema só habilita a resposta quando esse sender aparecer em message.received verificado.",
+      evidenceRule: "Não usamos último contato nem ID digitado manualmente para o HOST PASS.",
+      tone: "warning"
+    };
+  }
+
+  return {
+    stage: "6 · Real outbound",
+    title: "Enviar a resposta HOST PASS ao sender verificado",
+    detail: "Use o botão do Guided live test. O runtime precisa receber um provider_message_id real para concluir o gate.",
+    evidenceRule: "Timeout/5xx ambíguo continua SEND_RESULT_UNKNOWN; nunca vira PASS nem retry cego.",
+    tone: "warning"
+  };
 }
 
 function UrlRow({ label, value }: { label: string; value: string | null }) {
