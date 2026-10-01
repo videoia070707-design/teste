@@ -92,22 +92,7 @@ Deno.serve(async (request: Request) => {
   });
 
   try {
-    const [membership] = await sql<MembershipRow[]>`
-      select
-        membership.workspace_id,
-        workspace.name as workspace_name,
-        membership.role
-      from app_private.workspace_members membership
-      join app_private.workspaces workspace
-        on workspace.id = membership.workspace_id
-      where membership.user_id = ${user.id}
-      order by membership.created_at asc
-      limit 1
-    `;
-
-    if (!membership) {
-      return json({ error: "workspace_required" }, 409, cors);
-    }
+    const membership = await ensureWorkspaceMembership(sql, user.id);
 
     if (membership.role !== "owner" && membership.role !== "admin") {
       return json({ error: "admin_role_required" }, 403, cors);
@@ -186,6 +171,49 @@ Deno.serve(async (request: Request) => {
     await sql.end({ timeout: 1 });
   }
 });
+
+async function ensureWorkspaceMembership(
+  sql: ReturnType<typeof postgres>,
+  userId: string
+): Promise<MembershipRow> {
+  return await sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
+
+    const [existing] = await tx<MembershipRow[]>`
+      select
+        membership.workspace_id,
+        workspace.name as workspace_name,
+        membership.role
+      from app_private.workspace_members membership
+      join app_private.workspaces workspace
+        on workspace.id = membership.workspace_id
+      where membership.user_id = ${userId}
+      order by membership.created_at asc, membership.workspace_id asc
+      limit 1
+    `;
+
+    if (existing) return existing;
+
+    const [workspace] = await tx<{ id: string; name: string }[]>`
+      insert into app_private.workspaces (name)
+      values ('Meu Workspace')
+      returning id, name
+    `;
+
+    if (!workspace) throw new Error("WORKSPACE_BOOTSTRAP_FAILED");
+
+    await tx`
+      insert into app_private.workspace_members (workspace_id, user_id, role)
+      values (${workspace.id}, ${userId}, 'owner')
+    `;
+
+    return {
+      workspace_id: workspace.id,
+      workspace_name: workspace.name,
+      role: "owner"
+    };
+  });
+}
 
 async function buildStatus(
   sql: ReturnType<typeof postgres>,
