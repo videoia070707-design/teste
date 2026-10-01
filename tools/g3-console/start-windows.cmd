@@ -13,9 +13,33 @@ if not %errorlevel%==0 (
   exit /b 1
 )
 
-start "" "%G3_URL%"
-echo G3 Console iniciando em %G3_URL%
-echo Servidor continua restrito a 127.0.0.1; localhost e apenas a origem usada pelo navegador/Auth.
-echo Feche esta janela ou pressione Ctrl+C para encerrar.
+where curl >nul 2>nul
+if not %errorlevel%==0 (
+  echo G3 Console iniciando em %G3_URL%
+  start "G3 Console Server" /min cmd /k node scripts\g3-console-server.mjs
+  timeout /t 2 /nobreak >nul
+  start "" "%G3_URL%"
+  exit /b 0
+)
+
+echo Iniciando G3 Console local...
+start "G3 Console Server" /min cmd /k node scripts\g3-console-server.mjs
+
+for /l %%i in (1,1,20) do (
+  curl --fail --silent --show-error "%G3_URL%" >nul 2>nul
+  if not errorlevel 1 goto ready
+  timeout /t 1 /nobreak >nul
+)
+
 echo.
-node scripts\g3-console-server.mjs
+echo ERRO: o G3 Console nao respondeu em 20 segundos.
+echo Verifique a janela "G3 Console Server" para detalhes.
+echo.
+pause
+exit /b 1
+
+:ready
+echo G3 Console pronto em %G3_URL%
+start "" "%G3_URL%"
+echo A janela do servidor foi minimizada. Feche "G3 Console Server" para encerrar.
+exit /b 0
