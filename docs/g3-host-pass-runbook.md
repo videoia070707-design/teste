@@ -24,10 +24,10 @@ O caminho crítico da Meta não depende de Render nem de workers pagos:
 - PGMQ + `pg_net` + `pg_cron` — fila, wake-up e recovery;
 - PostgreSQL `app_private` — fonte de verdade;
 - Supabase Vault — secrets e keyring;
-- `/settings` — Setup Center para configuração administrativa não secreta;
-- `/connections/instagram/readiness` — Readiness Center baseado em DB/Vault/Edge.
+- `g3-control` — control plane owner/admin para setup e readiness;
+- G3 Console local — interface operacional do HOST PASS.
 
-O dashboard Next.js continua sendo a experiência administrativa e pode rodar localmente ou em um host gratuito. Os callbacks críticos da Meta permanecem ativos no Supabase Edge mesmo se o dashboard estiver offline.
+O dashboard Next.js continua sendo a experiência administrativa futura e pode rodar localmente ou em host gratuito, mas os callbacks críticos da Meta permanecem ativos no Supabase Edge mesmo se o dashboard estiver offline.
 
 Docker workers continuam fallback/escala futura e não são pré-condição do G3 Free.
 
@@ -39,27 +39,30 @@ Antes do teste real contra a Meta:
 - Security Advisor sem lints;
 - runtime `g3-runtime` com heartbeat recente;
 - Cron/recovery ativo;
-- `instagram-webhook`, `instagram-data-deletion`, `platform-legal` e `instagram-oauth-callback` ativos;
+- `instagram-webhook`, `instagram-data-deletion`, `platform-legal`, `instagram-oauth-start`, `instagram-oauth-callback`, `g3-control` e `g3-webhook-token` ativos;
 - migrations Supabase aplicadas até a versão atual;
 - `provider_secret_keyring` e `meta_webhook_verify_token` no Vault;
 - `meta_app_secret` real no Vault antes do fluxo OAuth/HMAC real;
 - `app_private.provider_runtime_config` preenchido somente com valores validados contra o App Meta real;
+- `graph_api_version_confirmed_at` preenchido somente após confirmação explícita da versão no App Meta/documentação oficial atual;
 - `app_private.platform_public_config` preenchido com operador e contato reais antes de registrar páginas legais;
-- CI principal + Free Runtime Adapter verdes.
+- CI principal + Free Runtime Adapter + G3 Console verdes.
 
-A role `automation_web` é least-privilege e não recebe escrita genérica nas tabelas de configuração. O Setup Center escreve somente por funções allowlisted da migration 027.
+A role `automation_web` é least-privilege e não recebe escrita genérica nas tabelas de configuração. O Setup Center escreve somente por funções allowlisted.
 
-## 2. Setup Center
+## 2. G3 Console / Setup Center
 
-Abra:
+Execute localmente:
 
-`/settings`
+`pnpm g3:console`
 
-Preencha somente valores reais e não secretos:
+Entre com Supabase Auth e preencha somente valores reais confirmados:
 
 - nome jurídico/operador;
 - e-mail de suporte/privacidade;
 - Meta App ID;
+- **Graph API version explicitamente validada**;
+- Meta App Secret no campo write-only;
 - OAuth authorize URL;
 - OAuth token URL;
 - OAuth token encoding;
@@ -68,37 +71,39 @@ Preencha somente valores reais e não secretos:
 
 Regras:
 
-- não inserir App Secret em formulário;
+- App Secret é write-only: é enviado ao control plane, armazenado no Vault e limpo do formulário; nunca é carregado de volta;
 - não copiar endpoints do Instagram Basic Display legado por memória;
 - endpoints OAuth/probe só são aceitos quando confirmados para o App Meta real;
-- versão Graph permanece explícita/pinada;
+- a Graph API version pré-semeada no banco **não conta como confirmada**;
+- preencher `Graph API version` no Console é uma confirmação operacional explícita e grava `graph_api_version_confirmed_at`;
+- campo vazio preserva configuração já existente; clearing destrutivo não é implícito;
 - qualquer mudança gera AuditLog.
 
-O `meta_app_secret` é provisionado diretamente no Supabase Vault e nunca aparece na UI.
+O Console mostra readiness como booleanos derivados do banco/Vault. `Conectar Instagram` só fica habilitado quando a configuração exigida estiver READY.
 
 ## 3. URLs públicas do App Meta
 
-O Readiness Center é a fonte operacional dessas URLs.
+Use exatamente as URLs exibidas pelo G3 Console.
 
 ### OAuth redirect
 
-`https://<project-ref>.supabase.co/functions/v1/instagram-oauth-callback`
+`https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/instagram-oauth-callback`
 
 ### Webhook
 
-`https://<project-ref>.supabase.co/functions/v1/instagram-webhook`
+`https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/instagram-webhook`
 
 ### Data deletion callback programático
 
-`https://<project-ref>.supabase.co/functions/v1/instagram-data-deletion`
+`https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/instagram-data-deletion`
 
 ### Privacy Policy
 
-`https://<project-ref>.supabase.co/functions/v1/platform-legal?document=privacy`
+`https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/platform-legal?document=privacy`
 
 ### Data deletion instructions
 
-`https://<project-ref>.supabase.co/functions/v1/platform-legal?document=data-deletion`
+`https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/platform-legal?document=data-deletion`
 
 As páginas legais retornam 503 enquanto `legal_entity_name` / `support_email` não estiverem configurados. Isso é intencional.
 
@@ -108,15 +113,15 @@ Use uma configuração compatível com conta profissional Instagram **Business o
 
 No App Dashboard da Meta:
 
-1. configure exatamente o OAuth redirect exibido pelo Readiness Center;
+1. configure exatamente o OAuth redirect exibido pelo Console;
 2. configure o webhook callback Edge;
 3. registre Privacy Policy e Data Deletion URLs Edge;
 4. confirme os scopes do G3;
 5. configure testers/roles necessários para o modo de desenvolvimento;
-6. coloque o App Secret diretamente no Supabase Vault;
-7. volte ao Setup Center e registre apenas App ID/endpoints/probe não secretos confirmados.
+6. copie o Verify Token gerado uma única vez pelo `g3-webhook-token` e use o mesmo valor no App Dashboard;
+7. no G3 Console, registre App ID/App Secret/endpoints/probe e a Graph API version **somente após validação atual**.
 
-Não usar endpoint herdado do Basic Display sem confirmação atual.
+Não usar endpoint herdado do Basic Display sem confirmação atual. Não considerar o valor armazenado `v26.0` validado apenas porque existe no banco; até confirmação explícita ele permanece `graph_api_version_confirmed_at = NULL`.
 
 ## 5. OAuth real
 
@@ -124,16 +129,16 @@ O usuário autenticado inicia o OAuth pela plataforma.
 
 Fluxo:
 
-1. plataforma valida sessão + workspace + `connections.manage`;
+1. plataforma valida sessão + workspace + owner/admin;
 2. gera state aleatório de alta entropia;
 3. persiste somente SHA-256 do state + workspace + ator + TTL;
 4. redirect URI é a Edge Function `instagram-oauth-callback`;
 5. Meta retorna `code + state` para a Edge Function;
 6. callback consome state uma única vez;
-7. o banco bloqueia consumo se o ator perdeu owner/admin do workspace;
-8. callback carrega App ID/endpoints do provider config e App Secret do Vault;
+7. o banco bloqueia consumo se o ator perdeu permissão no workspace;
+8. callback carrega App ID/endpoints/version do provider config e App Secret do Vault;
 9. troca authorization code server-side;
-10. promove token para long-lived quando suportado;
+10. promove token para long-lived quando suportado pela configuração validada;
 11. cifra a credencial com AES-256-GCM;
 12. anexa secret reference à conexão;
 13. só então `auth_valid=true`; health permanece `STALE` até as demais evidências.
@@ -195,7 +200,7 @@ G3 HOST PASS só fica verdadeiro quando coexistirem no mesmo workspace:
 - `message.received` real;
 - outbound text real com `provider_message_id`.
 
-Não existe botão administrativo para forçar PASS.
+A configuração também precisa estar structurally READY, incluindo Graph API version explicitamente confirmada. Não existe botão administrativo para forçar PASS.
 
 ## 10. Reliability — nunca retry cego
 
