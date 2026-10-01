@@ -63,15 +63,15 @@ O botão acima apenas abre a revisão do Blueprint na conta Render. O `render.ya
 
 O Blueprint do Render foi reduzido deliberadamente. Ele não recebe App ID, endpoints Instagram, Graph version ou secrets Meta.
 
-Entradas manuais do operador no Blueprint:
+Entrada manual do operador no Blueprint:
 
-- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`;
 - `DATABASE_URL` com a role `automation_web` via Supavisor.
 
-Valores fixos/derivados pelo Blueprint:
+Valores públicos/fixos/derivados pelo Blueprint:
 
 - `APP_ORIGIN` a partir da URL pública do próprio serviço;
 - `NEXT_PUBLIC_SUPABASE_URL` do projeto G3;
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` moderna (`sb_publishable_...`), pública por design;
 - `DATABASE_POOL_MAX=3`;
 - `GOOGLE_AUTH_ENABLED=false` enquanto Google OAuth não estiver configurado.
 
