@@ -1,0 +1,22 @@
+# G3 Console local
+
+Ferramenta de HOST PASS do Instagram Official usando o runtime gratuito do Supabase.
+
+## Windows
+
+1. Baixe/clone o repositório.
+2. Abra `tools/g3-console`.
+3. Dê duplo clique em `start-windows.cmd`.
+4. O navegador abrirá `http://127.0.0.1:4173/`.
+5. Mantenha a janela do launcher aberta enquanto usa o console; `Ctrl+C` encerra o servidor.
+
+O launcher tenta Node.js primeiro e usa Python 3 como fallback. Ele faz bind somente em `127.0.0.1`; não publica o console na rede e não exige Render, Replit ou outro serviço pago.
+
+Não abra `index.html` diretamente via `file://`: Auth e CORS do G3 foram deliberadamente limitados a origem localhost.
+
+## Segurança
+
+- O Supabase publishable key presente no HTML é público por design.
+- Meta App Secret é write-only e vai para Supabase Vault.
+- O console não deve armazenar senha da conta, App Secret ou tokens em arquivos locais.
+- `G3 PASS` nunca é produzido por self-test; exige OAuth real, inbound real e outbound real rastreável.
