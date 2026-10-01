@@ -6,6 +6,17 @@ import { getDatabase } from "@/lib/server/database";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+interface SetupInput {
+  legalEntityName: string | null;
+  supportEmail: string | null;
+  appId: string | null;
+  oauthAuthorizeUrl: string | null;
+  oauthTokenUrl: string | null;
+  oauthTokenEncoding: "multipart" | "urlencoded";
+  longLivedTokenUrl: string | null;
+  identityProbePath: string | null;
+}
+
 export async function POST(request: Request): Promise<Response> {
   const { userId, membership } = await requireWorkspaceContext();
   if (!can(membership.role as WorkspaceRole, "connections.manage")) {
@@ -13,27 +24,37 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const form = await request.formData();
+  let input: SetupInput;
 
-  const legalEntityName = optionalString(form.get("legalEntityName"), 200);
-  const supportEmail = optionalEmail(form.get("supportEmail"));
-  const appId = optionalPattern(form.get("appId"), /^[0-9]{4,40}$/);
-  const oauthAuthorizeUrl = optionalHttpsUrl(form.get("oauthAuthorizeUrl"));
-  const oauthTokenUrl = optionalHttpsUrl(form.get("oauthTokenUrl"));
-  const oauthTokenEncoding = tokenEncoding(form.get("oauthTokenEncoding"));
-  const longLivedTokenUrl = optionalHttpsUrl(form.get("longLivedTokenUrl"));
-  const identityProbePath = optionalProbePath(form.get("identityProbePath"));
+  try {
+    input = {
+      legalEntityName: optionalString(form.get("legalEntityName"), 200),
+      supportEmail: optionalEmail(form.get("supportEmail")),
+      appId: optionalPattern(form.get("appId"), /^[0-9]{4,40}$/),
+      oauthAuthorizeUrl: optionalHttpsUrl(form.get("oauthAuthorizeUrl")),
+      oauthTokenUrl: optionalHttpsUrl(form.get("oauthTokenUrl")),
+      oauthTokenEncoding: tokenEncoding(form.get("oauthTokenEncoding")),
+      longLivedTokenUrl: optionalHttpsUrl(form.get("longLivedTokenUrl")),
+      identityProbePath: optionalProbePath(form.get("identityProbePath"))
+    };
+  } catch (error) {
+    return Response.json(
+      { error: validationCode(error) },
+      { status: 400, headers: { "cache-control": "no-store" } }
+    );
+  }
 
   const sql = getDatabase();
   await sql.begin(async (tx) => {
-    await tx`select app_private.set_platform_public_config('legal_entity_name', ${legalEntityName})`;
-    await tx`select app_private.set_platform_public_config('support_email', ${supportEmail})`;
+    await tx`select app_private.set_platform_public_config('legal_entity_name', ${input.legalEntityName})`;
+    await tx`select app_private.set_platform_public_config('support_email', ${input.supportEmail})`;
     await tx`select app_private.set_instagram_platform_config(
-      ${appId},
-      ${oauthAuthorizeUrl},
-      ${oauthTokenUrl},
-      ${oauthTokenEncoding},
-      ${longLivedTokenUrl},
-      ${identityProbePath}
+      ${input.appId},
+      ${input.oauthAuthorizeUrl},
+      ${input.oauthTokenUrl},
+      ${input.oauthTokenEncoding},
+      ${input.longLivedTokenUrl},
+      ${input.identityProbePath}
     )`;
 
     await tx`
@@ -97,13 +118,20 @@ function optionalPattern(value: FormDataEntryValue | null, pattern: RegExp): str
 function optionalHttpsUrl(value: FormDataEntryValue | null): string | null {
   const normalized = optionalString(value, 2_000);
   if (normalized === null) return null;
-  const url = new URL(normalized);
+  let url: URL;
+  try {
+    url = new URL(normalized);
+  } catch {
+    throw new Error("URL_INVALID");
+  }
   if (url.protocol !== "https:") throw new Error("HTTPS_URL_REQUIRED");
   return url.toString();
 }
 
 function tokenEncoding(value: FormDataEntryValue | null): "multipart" | "urlencoded" {
-  return value === "urlencoded" ? "urlencoded" : "multipart";
+  if (value === "multipart" || value === null) return "multipart";
+  if (value === "urlencoded") return "urlencoded";
+  throw new Error("OAUTH_TOKEN_ENCODING_INVALID");
 }
 
 function optionalProbePath(value: FormDataEntryValue | null): string | null {
@@ -113,6 +141,12 @@ function optionalProbePath(value: FormDataEntryValue | null): string | null {
     throw new Error("IDENTITY_PROBE_PATH_INVALID");
   }
   return normalized;
+}
+
+function validationCode(error: unknown): string {
+  if (!(error instanceof Error)) return "INVALID_CONFIGURATION";
+  const code = error.message.trim().toUpperCase().replace(/[^A-Z0-9_]+/g, "_");
+  return code || "INVALID_CONFIGURATION";
 }
 
 function getAppOrigin(request: Request): string {
