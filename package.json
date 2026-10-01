@@ -4,6 +4,7 @@
   "packageManager": "pnpm@9.15.4",
   "scripts": {
     "dev": "pnpm --filter @automation/web dev",
+    "g3:console": "node scripts/g3-console-server.mjs",
     "hostpass:check": "node scripts/hostpass-check.mjs",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
