@@ -8,7 +8,9 @@ on:
       - 'apps/web/app/api/settings/platform/route.ts'
       - 'apps/web/lib/server/instagram-readiness.ts'
       - 'database/031_graph_api_version_confirmation.sql'
+      - 'database/032_instagram_outbound_requires_confirmed_graph_version.sql'
       - 'supabase/migrations/031_graph_api_version_confirmation.sql'
+      - 'supabase/migrations/032_instagram_outbound_requires_confirmed_graph_version.sql'
       - '.github/workflows/graph-version-confirmation.yml'
   pull_request:
     paths:
@@ -16,14 +18,34 @@ on:
       - 'apps/web/app/api/settings/platform/route.ts'
       - 'apps/web/lib/server/instagram-readiness.ts'
       - 'database/031_graph_api_version_confirmation.sql'
+      - 'database/032_instagram_outbound_requires_confirmed_graph_version.sql'
       - 'supabase/migrations/031_graph_api_version_confirmation.sql'
+      - 'supabase/migrations/032_instagram_outbound_requires_confirmed_graph_version.sql'
       - '.github/workflows/graph-version-confirmation.yml'
 
 jobs:
   guard:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: graph_version_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d graph_version_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/graph_version_ci
+      PGPASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
+
       - name: Validate explicit Graph version confirmation path
         shell: bash
         run: |
@@ -40,9 +62,114 @@ jobs:
           grep -q 'graphApiVersionConfirmedAt' apps/web/lib/server/instagram-readiness.ts
           grep -q 'graph_api_version_confirmed_at' apps/web/lib/server/instagram-readiness.ts
 
-          grep -q 'graph_api_version_confirmed_at' database/031_graph_api_version_confirmation.sql
           cmp --silent \
             database/031_graph_api_version_confirmation.sql \
             supabase/migrations/031_graph_api_version_confirmation.sql
+          cmp --silent \
+            database/032_instagram_outbound_requires_confirmed_graph_version.sql \
+            supabase/migrations/032_instagram_outbound_requires_confirmed_graph_version.sql
 
-          echo 'Graph API version requires explicit operator confirmation across UI, POST, readiness, and migration.'
+      - name: Prepare portable database stubs
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
+          end
+          $$;
+          create schema if not exists auth;
+          create table if not exists auth.users (
+            id uuid primary key,
+            email text,
+            created_at timestamptz not null default now()
+          );
+          SQL
+
+      - name: Apply portable migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for migration in database/*.sql; do
+            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+          done
+
+      - name: Prove outbound block before confirmation and allow after confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            workspace_id uuid;
+            connection_id uuid;
+          begin
+            insert into app_private.workspaces (name)
+            values ('Graph version CI')
+            returning id into workspace_id;
+
+            insert into app_private.channel_connections (
+              workspace_id, channel, provider_key, provider_mode, external_account_id, auth_valid
+            ) values (
+              workspace_id, 'instagram', 'instagram.meta.official', 'official', 'graph-version-ci-account', true
+            ) returning id into connection_id;
+
+            if exists (
+              select 1 from app_private.provider_runtime_config
+              where provider_key = 'instagram.meta.official'
+                and graph_api_version_confirmed_at is not null
+            ) then
+              raise exception 'seeded Graph API version unexpectedly starts confirmed';
+            end if;
+
+            -- Inbound evidence is provider-originated and must not depend on our
+            -- outbound version confirmation.
+            insert into app_private.messages (
+              workspace_id, connection_id, idempotency_key, correlation_id,
+              direction, message_type, delivery_state, payload
+            ) values (
+              workspace_id, connection_id, 'graph-ci-inbound', gen_random_uuid(),
+              'inbound', 'text', 'DELIVERED', '{}'::jsonb
+            );
+
+            begin
+              insert into app_private.messages (
+                workspace_id, connection_id, idempotency_key, correlation_id,
+                direction, message_type, delivery_state, payload
+              ) values (
+                workspace_id, connection_id, 'graph-ci-blocked', gen_random_uuid(),
+                'outbound', 'text', 'QUEUED', '{}'::jsonb
+              );
+              raise exception 'outbound insert was accepted before explicit version confirmation';
+            exception
+              when check_violation then null;
+            end;
+
+            perform app_private.set_instagram_platform_config(
+              null, 'v26.0', null, null, null, null, null
+            );
+
+            if not exists (
+              select 1 from app_private.provider_runtime_config
+              where provider_key = 'instagram.meta.official'
+                and graph_api_version = 'v26.0'
+                and graph_api_version_confirmed_at is not null
+            ) then
+              raise exception 'explicit Graph API version confirmation was not persisted';
+            end if;
+
+            insert into app_private.messages (
+              workspace_id, connection_id, idempotency_key, correlation_id,
+              direction, message_type, delivery_state, payload
+            ) values (
+              workspace_id, connection_id, 'graph-ci-allowed', gen_random_uuid(),
+              'outbound', 'text', 'QUEUED', '{}'::jsonb
+            );
+          end
+          $$;
+          SQL
+
+          echo 'Graph API version guard PASSED: inbound allowed, outbound blocked before confirmation, outbound allowed after explicit confirmation.'
