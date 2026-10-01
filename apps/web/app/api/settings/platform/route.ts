@@ -18,6 +18,13 @@ interface SetupInput {
 }
 
 export async function POST(request: Request): Promise<Response> {
+  if (!isTrustedMutationRequest(request)) {
+    return Response.json(
+      { error: "cross_origin_request_forbidden" },
+      { status: 403, headers: { "cache-control": "no-store" } }
+    );
+  }
+
   const { userId, membership } = await requireWorkspaceContext();
   if (!can(membership.role as WorkspaceRole, "connections.manage")) {
     return Response.json({ error: "forbidden" }, { status: 403 });
@@ -147,6 +154,25 @@ function validationCode(error: unknown): string {
   if (!(error instanceof Error)) return "INVALID_CONFIGURATION";
   const code = error.message.trim().toUpperCase().replace(/[^A-Z0-9_]+/g, "_");
   return code || "INVALID_CONFIGURATION";
+}
+
+function isTrustedMutationRequest(request: Request): boolean {
+  const expectedOrigin = getAppOrigin(request);
+  const origin = request.headers.get("origin");
+  if (origin) return normalizeOrigin(origin) === expectedOrigin;
+
+  const referer = request.headers.get("referer");
+  if (referer) return normalizeOrigin(referer) === expectedOrigin;
+
+  return false;
+}
+
+function normalizeOrigin(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
 }
 
 function getAppOrigin(request: Request): string {
