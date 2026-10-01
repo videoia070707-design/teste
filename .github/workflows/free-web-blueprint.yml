@@ -6,11 +6,13 @@ on:
     paths:
       - render.yaml
       - .github/workflows/free-web-blueprint.yml
+      - apps/web/lib/server/database.ts
       - Dockerfile
   pull_request:
     paths:
       - render.yaml
       - .github/workflows/free-web-blueprint.yml
+      - apps/web/lib/server/database.ts
       - Dockerfile
 
 jobs:
@@ -73,3 +75,9 @@ jobs:
 
           database_pool = envs.find { |entry| entry["key"] == "DATABASE_POOL_MAX" }
           abort "free web database pool must remain capped at 3" unless database_pool && database_pool["value"].to_s == "3"
+
+          database_policy = File.read("apps/web/lib/server/database.ts")
+          abort "public database policy must require automation_web" unless database_policy.include?("automation_web")
+          abort "public database policy must enforce TLS" unless database_policy.include?("sslmode") && database_policy.include?("verify-full")
+          abort "public Supavisor policy must include project-ref qualified usernames" unless database_policy.include?("automation_web.${projectRef}")
+          abort "public database policy must reject admin role fallback" unless database_policy.include?("least-privilege role")
