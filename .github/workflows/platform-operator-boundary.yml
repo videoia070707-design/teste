@@ -1,0 +1,193 @@
+name: Platform Operator Boundary
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'database/033_platform_operator_boundary.sql'
+      - 'supabase/migrations/033_platform_operator_boundary.sql'
+      - 'supabase/migrations/034_platform_operator_meta_secret_guard.sql'
+      - 'apps/web/lib/server/platform-operator.ts'
+      - 'apps/web/app/settings/page.tsx'
+      - 'apps/web/app/api/settings/platform/route.ts'
+      - 'apps/web/app/api/settings/platform-operator/route.ts'
+      - '.github/workflows/platform-operator-boundary.yml'
+  pull_request:
+    paths:
+      - 'database/033_platform_operator_boundary.sql'
+      - 'supabase/migrations/033_platform_operator_boundary.sql'
+      - 'supabase/migrations/034_platform_operator_meta_secret_guard.sql'
+      - 'apps/web/lib/server/platform-operator.ts'
+      - 'apps/web/app/settings/page.tsx'
+      - 'apps/web/app/api/settings/platform/route.ts'
+      - 'apps/web/app/api/settings/platform-operator/route.ts'
+      - '.github/workflows/platform-operator-boundary.yml'
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: platform_operator_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d platform_operator_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/platform_operator_ci
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate web authorization wiring
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'isPlatformOperator' apps/web/app/settings/page.tsx
+          grep -q 'platform_operator_required' apps/web/app/api/settings/platform-operator/route.ts
+          grep -q 'set_platform_public_config(\${userId}' apps/web/app/api/settings/platform-operator/route.ts
+          grep -q 'set_instagram_platform_config(' apps/web/app/api/settings/platform-operator/route.ts
+          grep -q '\${userId},' apps/web/app/api/settings/platform-operator/route.ts
+          grep -q 'set_meta_app_secret(\${userId}' apps/web/app/api/settings/platform-operator/route.ts
+          grep -q 'export { POST } from "../platform-operator/route"' apps/web/app/api/settings/platform/route.ts
+
+      - name: Validate Supabase-only secret guard shape
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'require_platform_operator(p_actor_user_id)' supabase/migrations/034_platform_operator_meta_secret_guard.sql
+          grep -q 'revoke execute on function app_private.set_meta_app_secret(text) from automation_web' supabase/migrations/034_platform_operator_meta_secret_guard.sql
+          grep -q 'grant execute on function app_private.set_meta_app_secret(uuid, text) to automation_web' supabase/migrations/034_platform_operator_meta_secret_guard.sql
+
+      - name: Prepare portable database stubs
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'automation_web') then create role automation_web nologin; end if;
+          end
+          $$;
+          create schema if not exists auth;
+          create table if not exists auth.users (
+            id uuid primary key,
+            email text,
+            created_at timestamptz not null default now()
+          );
+          SQL
+
+      - name: Apply portable migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for migration in database/*.sql; do
+            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration" >/dev/null
+          done
+
+      - name: Prove tenant denial and explicit operator access
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            tenant_user uuid := gen_random_uuid();
+            operator_user uuid := gen_random_uuid();
+          begin
+            insert into auth.users (id, email) values
+              (tenant_user, 'tenant@example.test'),
+              (operator_user, 'operator@example.test');
+
+            begin
+              perform app_private.set_platform_public_config(
+                tenant_user,
+                'legal_entity_name',
+                'must-not-write'
+              );
+              raise exception 'tenant user mutated global control-plane config';
+            exception
+              when insufficient_privilege then null;
+            end;
+
+            if app_private.is_platform_operator(tenant_user) then
+              raise exception 'tenant user was implicitly promoted to platform operator';
+            end if;
+
+            insert into app_private.platform_operators (user_id, role)
+            values (operator_user, 'owner');
+
+            if not app_private.is_platform_operator(operator_user) then
+              raise exception 'explicit platform operator was not recognized';
+            end if;
+
+            perform app_private.set_platform_public_config(
+              operator_user,
+              'legal_entity_name',
+              'CI Platform Operator'
+            );
+            perform app_private.set_instagram_platform_config(
+              operator_user,
+              null,
+              'v26.0',
+              null,
+              null,
+              null,
+              null,
+              null
+            );
+
+            if not exists (
+              select 1 from app_private.platform_public_config
+              where config_key = 'legal_entity_name'
+                and config_value = 'CI Platform Operator'
+            ) then
+              raise exception 'authorized platform operator write did not persist';
+            end if;
+
+            if not exists (
+              select 1 from app_private.provider_runtime_config
+              where provider_key = 'instagram.meta.official'
+                and graph_api_version = 'v26.0'
+                and graph_api_version_confirmed_at is not null
+            ) then
+              raise exception 'authorized operator Graph-version confirmation did not persist';
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Prove automation_web cannot self-promote or call legacy setters
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$TEST_DATABASE_URL" -At -v ON_ERROR_STOP=1 <<'SQL' > /tmp/grants.txt
+          select has_table_privilege('automation_web', 'app_private.platform_operators', 'SELECT');
+          select has_table_privilege('automation_web', 'app_private.platform_operators', 'INSERT');
+          select has_table_privilege('automation_web', 'app_private.platform_operators', 'UPDATE');
+          select has_table_privilege('automation_web', 'app_private.platform_operators', 'DELETE');
+          select has_function_privilege('automation_web', 'app_private.set_platform_public_config(uuid,text,text)', 'EXECUTE');
+          select has_function_privilege('automation_web', 'app_private.set_platform_public_config(text,text)', 'EXECUTE');
+          select has_function_privilege('automation_web', 'app_private.set_instagram_platform_config(uuid,text,text,text,text,text,text,text)', 'EXECUTE');
+          select has_function_privilege('automation_web', 'app_private.set_instagram_platform_config(text,text,text,text,text,text,text)', 'EXECUTE');
+          SQL
+
+          expected=$'t\nf\nf\nf\nt\nf\nt\nf'
+          actual="$(cat /tmp/grants.txt)"
+          test "$actual" = "$expected" || {
+            echo "Unexpected automation_web grants:" >&2
+            cat /tmp/grants.txt >&2
+            exit 1
+          }
+
+          echo 'Platform operator boundary PASSED: tenant denied, explicit operator allowed, automation_web cannot self-promote or invoke legacy global setters.'
