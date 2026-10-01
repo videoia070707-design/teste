@@ -40,6 +40,7 @@ jobs:
             025_platform_public_config.sql
             026_oauth_consumption_membership_guard.sql
             027_setup_center_config_bridge.sql
+            028_provider_runtime_config_portability.sql
           )
           mapfile -t actual < <(find database -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
           test "${#actual[@]}" -eq "${#expected[@]}"
@@ -72,6 +73,7 @@ jobs:
             025_platform_public_config.sql
             026_oauth_consumption_membership_guard.sql
             027_setup_center_config_bridge.sql
+            028_provider_runtime_config_portability.sql
           )
           mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
           test "${#actual[@]}" -eq "${#expected[@]}"
@@ -79,7 +81,7 @@ jobs:
             test "${actual[$i]}" = "${expected[$i]}"
           done
 
-          for shared in 021_meta_compliance.sql 025_platform_public_config.sql 026_oauth_consumption_membership_guard.sql 027_setup_center_config_bridge.sql; do
+          for shared in 021_meta_compliance.sql 025_platform_public_config.sql 026_oauth_consumption_membership_guard.sql 027_setup_center_config_bridge.sql 028_provider_runtime_config_portability.sql; do
             cmp --silent "database/$shared" "supabase/migrations/$shared" || {
               echo "Portable migration $shared drifted between database/ and supabase/migrations/." >&2
               exit 1
