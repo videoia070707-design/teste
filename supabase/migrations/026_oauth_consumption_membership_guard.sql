@@ -17,6 +17,9 @@ begin
         and member.user_id = old.initiated_by_user_id
         and member.role in ('owner', 'admin')
     ) then
+      -- Silently suppress consumption. UPDATE ... RETURNING yields no row, so
+      -- existing callback code treats the state as invalid/expired instead of
+      -- attaching credentials after authorization was revoked.
       return null;
     end if;
   end if;
