@@ -5,15 +5,29 @@ const PROJECT_REF = "cqtrigqlktekczbbsxiy";
 const PROJECT_ORIGIN = `https://${PROJECT_REF}.supabase.co`;
 const CONSOLE_PATH = "tools/g3-console/index.html";
 const SERVER_PATH = "scripts/g3-console-server.mjs";
+const WEB_PACKAGE_PATH = "apps/web/package.json";
 const OPTIONAL_ENV_PATH = process.argv[2] ? resolve(process.argv[2]) : null;
 
-const [consoleHtml, serverSource] = await Promise.all([
+const [consoleHtml, serverSource, webPackageSource] = await Promise.all([
   readFile(CONSOLE_PATH, "utf8"),
-  readFile(SERVER_PATH, "utf8")
+  readFile(SERVER_PATH, "utf8"),
+  readFile(WEB_PACKAGE_PATH, "utf8")
 ]);
 
 const errors = [];
 const notes = [];
+const webPackage = JSON.parse(webPackageSource);
+const supabaseJsVersion = webPackage?.dependencies?.["@supabase/supabase-js"];
+
+if (typeof supabaseJsVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(supabaseJsVersion)) {
+  errors.push("apps/web must pin @supabase/supabase-js to an exact semver version.");
+} else {
+  expectIncludes(
+    consoleHtml,
+    `https://esm.sh/@supabase/supabase-js@${supabaseJsVersion}`,
+    "G3 Console Supabase client version must match apps/web/package.json exactly."
+  );
+}
 
 expectIncludes(consoleHtml, PROJECT_ORIGIN, "console must target the real G3 Supabase project");
 expectIncludes(consoleHtml, "/functions/v1/g3-control", "console must use the authenticated G3 control plane");
@@ -58,6 +72,7 @@ if (errors.length > 0) {
 console.log("G3 local HOST PASS tooling check PASSED.");
 console.log("- primary control surface: localhost + Supabase Free Edge");
 console.log("- provider secrets: Vault-only");
+console.log(`- Supabase browser client aligned at ${supabaseJsVersion}`);
 console.log("- primary G3 Console does not require DATABASE_URL or a pooler host");
 if (OPTIONAL_ENV_PATH) console.log("- optional Next.js dashboard env also passed least-privilege DB checks");
 for (const note of notes) console.log(`- ${note}`);
