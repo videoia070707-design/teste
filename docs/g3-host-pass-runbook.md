@@ -14,7 +14,7 @@ Permissões solicitadas:
 
 ## 0. Arquitetura usada no HOST PASS gratuito
 
-O caminho crítico da Meta não depende do host do dashboard:
+O caminho crítico da Meta não depende de Render nem de workers pagos:
 
 - `instagram-oauth-callback` — Supabase Edge, callback OAuth público protegido por state;
 - `instagram-webhook` — Supabase Edge, challenge + HMAC sobre raw body;
@@ -23,9 +23,11 @@ O caminho crítico da Meta não depende do host do dashboard:
 - `g3-runtime` — Supabase Edge, executor ingress/outbound;
 - PGMQ + `pg_net` + `pg_cron` — fila, wake-up e recovery;
 - PostgreSQL `app_private` — fonte de verdade;
-- Supabase Vault — secrets e keyring.
+- Supabase Vault — secrets e keyring;
+- `/settings` — Setup Center para configuração administrativa não secreta;
+- `/connections/instagram/readiness` — Readiness Center baseado em DB/Vault/Edge.
 
-O dashboard Next.js continua necessário para a experiência do usuário e para iniciar o OAuth autenticado, mas webhook, legal/compliance e retorno da Meta permanecem disponíveis mesmo se um host web gratuito estiver hibernando.
+O dashboard Next.js continua sendo a experiência administrativa e pode rodar localmente ou em um host gratuito. Os callbacks críticos da Meta permanecem ativos no Supabase Edge mesmo se o dashboard estiver offline.
 
 Docker workers continuam fallback/escala futura e não são pré-condição do G3 Free.
 
@@ -43,15 +45,40 @@ Antes do teste real contra a Meta:
 - `meta_app_secret` real no Vault antes do fluxo OAuth/HMAC real;
 - `app_private.provider_runtime_config` preenchido somente com valores validados contra o App Meta real;
 - `app_private.platform_public_config` preenchido com operador e contato reais antes de registrar páginas legais;
-- web app usa role PostgreSQL `automation_web`, nunca a senha administrativa `postgres`;
-- conexão PostgreSQL pública usa TLS;
 - CI principal + Free Runtime Adapter verdes.
 
-## 2. URLs públicas do App Meta
+A role `automation_web` é least-privilege e não recebe escrita genérica nas tabelas de configuração. O Setup Center escreve somente por funções allowlisted da migration 027.
+
+## 2. Setup Center
+
+Abra:
+
+`/settings`
+
+Preencha somente valores reais e não secretos:
+
+- nome jurídico/operador;
+- e-mail de suporte/privacidade;
+- Meta App ID;
+- OAuth authorize URL;
+- OAuth token URL;
+- OAuth token encoding;
+- long-lived token URL;
+- identity probe path.
+
+Regras:
+
+- não inserir App Secret em formulário;
+- não copiar endpoints do Instagram Basic Display legado por memória;
+- endpoints OAuth/probe só são aceitos quando confirmados para o App Meta real;
+- versão Graph permanece explícita/pinada;
+- qualquer mudança gera AuditLog.
+
+O `meta_app_secret` é provisionado diretamente no Supabase Vault e nunca aparece na UI.
+
+## 3. URLs públicas do App Meta
 
 O Readiness Center é a fonte operacional dessas URLs.
-
-Para o projeto Supabase hospedado, o formato esperado é:
 
 ### OAuth redirect
 
@@ -73,73 +100,64 @@ Para o projeto Supabase hospedado, o formato esperado é:
 
 `https://<project-ref>.supabase.co/functions/v1/platform-legal?document=data-deletion`
 
-As páginas legais retornam 503 enquanto `legal_entity_name` / `support_email` não estiverem configurados. Isso é intencional: documento incompleto não deve parecer publicado.
+As páginas legais retornam 503 enquanto `legal_entity_name` / `support_email` não estiverem configurados. Isso é intencional.
 
-## 3. Configurar o App Meta real
+## 4. Configurar o App Meta real
 
-Use uma configuração de Instagram compatível com conta profissional **Business ou Creator**.
+Use uma configuração compatível com conta profissional Instagram **Business ou Creator**.
 
-Depois de validar os valores no App Dashboard, registre no provider global:
+No App Dashboard da Meta:
 
-- `app_id`;
-- `oauth_authorize_url`;
-- `oauth_token_url`;
-- `oauth_token_encoding`;
-- `long_lived_token_url`;
-- `graph_base_url`;
-- `graph_api_version`;
-- `identity_probe_path`.
+1. configure exatamente o OAuth redirect exibido pelo Readiness Center;
+2. configure o webhook callback Edge;
+3. registre Privacy Policy e Data Deletion URLs Edge;
+4. confirme os scopes do G3;
+5. configure testers/roles necessários para o modo de desenvolvimento;
+6. coloque o App Secret diretamente no Supabase Vault;
+7. volte ao Setup Center e registre apenas App ID/endpoints/probe não secretos confirmados.
 
-Regras:
+Não usar endpoint herdado do Basic Display sem confirmação atual.
 
-- não copiar endpoints do Instagram Basic Display legado por memória;
-- versão Graph é pinada e upgrade é explícito;
-- `identity_probe_path` ausente mantém health em `STALE`, nunca falso `HEALTHY`;
-- `meta_app_secret` vai somente para Supabase Vault;
-- workspace admins não alteram provider runtime config global.
+## 5. OAuth real
 
-## 4. OAuth real
-
-O usuário autenticado inicia o OAuth pelo dashboard.
+O usuário autenticado inicia o OAuth pela plataforma.
 
 Fluxo:
 
-1. web valida sessão + workspace + `connections.manage`;
+1. plataforma valida sessão + workspace + `connections.manage`;
 2. gera state aleatório de alta entropia;
 3. persiste somente SHA-256 do state + workspace + ator + TTL;
-4. redirect URI usado na autorização é a Edge Function `instagram-oauth-callback`;
+4. redirect URI é a Edge Function `instagram-oauth-callback`;
 5. Meta retorna `code + state` para a Edge Function;
 6. callback consome state uma única vez;
-7. o banco bloqueia consumo se o ator deixou de ser owner/admin do workspace;
+7. o banco bloqueia consumo se o ator perdeu owner/admin do workspace;
 8. callback carrega App ID/endpoints do provider config e App Secret do Vault;
 9. troca authorization code server-side;
 10. promove token para long-lived quando suportado;
-11. cifra a credencial com AES-256-GCM usando o mesmo AAD do restante da plataforma;
-12. anexa a secret reference à conexão;
-13. só então `auth_valid=true` e health inicial permanece `STALE` até as demais evidências.
-
-O callback público não depende de cookie do dashboard: a autorização do retorno é representada pelo state de alta entropia, curto, one-time e ligado ao ator/workspace. Revogação de membership antes do consumo invalida o state no banco.
+11. cifra a credencial com AES-256-GCM;
+12. anexa secret reference à conexão;
+13. só então `auth_valid=true`; health permanece `STALE` até as demais evidências.
 
 ### Evidência esperada
 
 **OAuth real + credencial criptografada = READY**.
 
-## 5. Webhook real
+## 6. Webhook real
 
-`instagram-webhook` possui dois fluxos separados:
+`instagram-webhook` possui dois fluxos:
 
-- GET: challenge usando `meta_webhook_verify_token`;
-- POST: HMAC SHA-256 sobre o **raw body** usando `meta_app_secret`.
+- GET: challenge usando `meta_webhook_verify_token` do Vault;
+- POST: HMAC SHA-256 sobre o **raw body** usando `meta_app_secret` do Vault.
 
-Evento assinado só recebe ACK de sucesso depois de ser persistido em `webhook_ingress_events`. Falha de persistência retorna 503 para permitir retry do provider.
+Evento assinado só recebe ACK depois de persistir em `webhook_ingress_events`. Falha de persistência retorna 503 para permitir retry.
 
 ### Evidência esperada
 
 **Webhook assinado persistido = READY**.
 
-Isso isoladamente ainda não é HOST PASS.
+Isto isoladamente ainda não é HOST PASS.
 
-## 6. Inbound real
+## 7. Inbound real
 
 De uma segunda conta tester, envie DM para a conta profissional conectada.
 
@@ -153,15 +171,13 @@ Não usar DM fria como teste. A plataforma responde somente a identidade observa
 
 **Mensagem real normalizada = READY**.
 
-## 7. Outbound real
+## 8. Outbound real
 
 Use a plataforma para responder ao inbound observado.
 
 Fluxo:
 
 `enqueue → QUEUED → PGMQ → g3-runtime → Instagram API → provider_message_id → SENT`
-
-A chamada usa base/versionamento centralizados no provider config.
 
 ### Evidência esperada
 
@@ -171,7 +187,7 @@ A chamada usa base/versionamento centralizados no provider config.
 
 **Resposta DM real rastreada = READY**.
 
-## 8. Resultado do gate
+## 9. Resultado do gate
 
 G3 HOST PASS só fica verdadeiro quando coexistirem no mesmo workspace:
 
@@ -181,7 +197,7 @@ G3 HOST PASS só fica verdadeiro quando coexistirem no mesmo workspace:
 
 Não existe botão administrativo para forçar PASS.
 
-## 9. Reliability — nunca retry cego
+## 10. Reliability — nunca retry cego
 
 Timeout, 5xx, transporte quebrado pós-dispatch, 2xx sem ID suficiente ou falha de persistência depois de possível side effect devem convergir para:
 
@@ -189,7 +205,7 @@ Timeout, 5xx, transporte quebrado pós-dispatch, 2xx sem ID suficiente ou falha 
 
 Esse estado nunca volta automaticamente para a fila. Reconciliação exige evidência externa e AuditLog.
 
-## 10. Compliance / data deletion
+## 11. Compliance / data deletion
 
 Fluxo programático:
 
@@ -205,7 +221,7 @@ Regras:
 
 Compliance não conta como evidência de mensagens do HOST PASS, mas deve estar funcional antes de usuários reais.
 
-## 11. O que preservar depois do teste
+## 12. O que preservar depois do teste
 
 - `channel_connections` da conexão oficial;
 - secret reference criptografada;
@@ -217,6 +233,6 @@ Compliance não conta como evidência de mensagens do HOST PASS, mas deve estar 
 
 Nunca guardar tokens ou secrets em logs genéricos.
 
-## 12. Critério para liberar G4
+## 13. Critério para liberar G4
 
 Somente após **G3 HOST PASS real** e callbacks de compliance corretamente configurados o roadmap libera **G4 — WhatsApp Official**.
