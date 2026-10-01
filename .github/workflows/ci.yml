@@ -263,7 +263,7 @@ jobs:
               'https://example.test/oauth/token',
               'multipart',
               'https://example.test/oauth/long-lived',
-              '/me?fields=id,username'
+              '/ci/identity-probe'
             );
 
             if not exists (
@@ -284,7 +284,7 @@ jobs:
                 and oauth_token_url = 'https://example.test/oauth/token'
                 and oauth_token_encoding = 'multipart'
                 and long_lived_token_url = 'https://example.test/oauth/long-lived'
-                and identity_probe_path = '/me?fields=id,username'
+                and identity_probe_path = '/ci/identity-probe'
             ) then
               raise exception 'portable provider runtime config contract failed';
             end if;
