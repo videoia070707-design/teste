@@ -70,6 +70,20 @@
     </section>
 
     <section class="card" style="margin-top:16px">
+      <div class="eyebrow">Webhook verification</div>
+      <h2>Verify Token da Meta</h2>
+      <p>Gere o valor somente quando estiver configurando o webhook no App Meta. A rotação substitui o token anterior no Vault.</p>
+      <label for="webhookVerifyToken">Verify Token</label>
+      <input id="webhookVerifyToken" class="mono" type="text" readonly autocomplete="off" placeholder="Clique em gerar/rotacionar para revelar um token novo" />
+      <div class="actions">
+        <button id="rotate-webhook-token">Gerar/rotacionar Verify Token</button>
+        <button id="copy-webhook-token" disabled>Copiar token</button>
+      </div>
+      <div class="notice">Se o webhook já estiver configurado na Meta, rotacionar este token exige atualizar o mesmo valor no App Dashboard antes de uma nova verificação.</div>
+      <div id="webhook-token-message" class="notice hidden"></div>
+    </section>
+
+    <section class="card" style="margin-top:16px">
       <div class="eyebrow">Public Meta surfaces</div><h2>URLs do projeto</h2>
       <div class="row"><span>OAuth callback</span><span class="mono">https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/instagram-oauth-callback</span></div>
       <div class="row"><span>Webhook callback</span><span class="mono">https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/instagram-webhook</span></div>
@@ -87,6 +101,7 @@
   const PUBLISHABLE_KEY = "sb_publishable_YvoQENFFqgNkiH2xZxBB5Q_vb0kNyS_";
   const CONTROL_URL = `${SUPABASE_URL}/functions/v1/g3-control`;
   const OAUTH_START_URL = `${SUPABASE_URL}/functions/v1/instagram-oauth-start`;
+  const WEBHOOK_TOKEN_URL = `${SUPABASE_URL}/functions/v1/g3-webhook-token`;
   const supabase = createClient(SUPABASE_URL, PUBLISHABLE_KEY, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
   });
@@ -114,10 +129,12 @@
 
   $("signin").addEventListener("click", () => authenticate("signin"));
   $("signup").addEventListener("click", () => authenticate("signup"));
-  $("signout").addEventListener("click", async () => { await supabase.auth.signOut(); await renderSession(); });
+  $("signout").addEventListener("click", async () => { await supabase.auth.signOut(); clearWebhookToken(); await renderSession(); });
   $("refresh-status").addEventListener("click", () => refreshStatus());
   $("save-setup").addEventListener("click", () => saveSetup());
   $("connect-instagram").addEventListener("click", () => startInstagramOAuth());
+  $("rotate-webhook-token").addEventListener("click", () => rotateWebhookToken());
+  $("copy-webhook-token").addEventListener("click", () => copyWebhookToken());
 
   supabase.auth.onAuthStateChange(() => queueMicrotask(renderSession));
   await renderSession();
@@ -146,6 +163,7 @@
     $("auth-card").classList.toggle("hidden", Boolean(session));
     $("control").classList.toggle("hidden", !session);
     $("session-pill").textContent = session?.user?.email ?? "desconectado";
+    if (!session) clearWebhookToken();
     if (session) await refreshStatus();
   }
 
@@ -204,6 +222,69 @@
     } catch (error) {
       setMessage("setup-message", `Falha ao salvar: ${error instanceof Error ? error.message : "erro"}`, true);
     }
+  }
+
+  async function rotateWebhookToken() {
+    const session = (await supabase.auth.getSession()).data.session;
+    if (!session) return;
+
+    const proceed = window.confirm(
+      "Rotacionar o Verify Token substitui o valor anterior no Vault. Se o webhook já estiver configurado na Meta, você terá que atualizar o token lá também. Continuar?"
+    );
+    if (!proceed) return;
+
+    const button = $("rotate-webhook-token");
+    button.disabled = true;
+    clearWebhookToken();
+    setMessage("webhook-token-message", "Gerando e salvando um token novo no Vault…", false);
+
+    try {
+      const response = await fetch(WEBHOOK_TOKEN_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          apikey: PUBLISHABLE_KEY,
+          "content-type": "application/json"
+        },
+        body: "{}"
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
+      if (typeof body.verifyToken !== "string" || body.verifyToken.length < 32) {
+        throw new Error("verify_token_invalid");
+      }
+
+      $("webhookVerifyToken").value = body.verifyToken;
+      $("copy-webhook-token").disabled = false;
+      setMessage("webhook-token-message", "Token rotacionado. Copie agora e cole no App Meta. Ele não será recarregado depois.", false);
+      await refreshStatus();
+    } catch (error) {
+      clearWebhookToken();
+      setMessage("webhook-token-message", `Falha ao rotacionar: ${error instanceof Error ? error.message : "erro"}`, true);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async function copyWebhookToken() {
+    const input = $("webhookVerifyToken");
+    const token = input.value;
+    if (!token) return;
+
+    try {
+      await navigator.clipboard.writeText(token);
+      setMessage("webhook-token-message", "Verify Token copiado. Cole-o no campo de verificação do webhook no App Meta.", false);
+    } catch {
+      input.focus();
+      input.select();
+      const copied = document.execCommand("copy");
+      setMessage("webhook-token-message", copied ? "Verify Token copiado." : "Não foi possível copiar automaticamente; copie o valor do campo manualmente.", !copied);
+    }
+  }
+
+  function clearWebhookToken() {
+    $("webhookVerifyToken").value = "";
+    $("copy-webhook-token").disabled = true;
   }
 
   async function startInstagramOAuth() {
