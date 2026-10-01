@@ -50,5 +50,8 @@ jobs:
           done
           grep -q '<title>G3 Console — Instagram Official</title>' /tmp/g3-console.html
           grep -q 'Supabase Free control plane' /tmp/g3-console.html
+          grep -q 'id="rotate-webhook-token"' /tmp/g3-console.html
+          grep -q 'id="copy-webhook-token"' /tmp/g3-console.html
+          grep -q '/functions/v1/g3-webhook-token' /tmp/g3-console.html
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/not-found)" = "404"
           curl --silent --head http://127.0.0.1:3000/ | grep -qi '^cache-control: no-store'
