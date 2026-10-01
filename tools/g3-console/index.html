@@ -52,6 +52,7 @@
         <div><label for="legalEntityName">Nome jurídico / operador</label><input id="legalEntityName" maxlength="200" /></div>
         <div><label for="supportEmail">E-mail de suporte / privacidade</label><input id="supportEmail" type="email" maxlength="320" /></div>
         <div><label for="appId">Meta App ID</label><input id="appId" inputmode="numeric" pattern="[0-9]{4,40}" /></div>
+        <div><label for="graphApiVersion">Graph API version confirmada</label><input id="graphApiVersion" class="mono" pattern="v[0-9]{1,3}\.[0-9]{1,3}" placeholder="vNN.N — somente após validar na Meta" /></div>
         <div><label for="metaAppSecret">Meta App Secret</label><input id="metaAppSecret" type="password" minlength="16" maxlength="512" autocomplete="new-password" placeholder="write-only; deixe vazio para não alterar" /></div>
         <div><label for="oauthAuthorizeUrl">OAuth authorize URL</label><input id="oauthAuthorizeUrl" type="url" placeholder="https://..." /></div>
         <div><label for="oauthTokenUrl">OAuth token URL</label><input id="oauthTokenUrl" type="url" placeholder="https://..." /></div>
@@ -59,7 +60,7 @@
         <div><label for="identityProbePath">Identity probe path</label><input id="identityProbePath" placeholder="/path confirmado" /></div>
         <div><label for="oauthTokenEncoding">OAuth token encoding</label><select id="oauthTokenEncoding"><option value="multipart">multipart</option><option value="urlencoded">urlencoded</option></select></div>
       </div>
-      <div class="notice">Não copie endpoints do Instagram Basic Display legado. Grave somente valores confirmados para o Instagram API with Instagram Login do App Meta real.</div>
+      <div class="notice">Não copie endpoints do Instagram Basic Display legado. Grave somente valores confirmados para o Instagram API with Instagram Login do App Meta real. Preencher Graph API version confirma explicitamente essa versão para readiness; não copie o valor pré-semeado sem validar.</div>
       <div class="actions">
         <button id="save-setup" class="primary">Salvar setup</button>
         <button id="connect-instagram">Conectar Instagram</button>
@@ -110,6 +111,7 @@
   const configLabels = {
     edgeRuntime: "Edge runtime",
     metaAppId: "Meta App ID",
+    graphApiVersion: "Graph API version confirmada",
     metaAppSecret: "Meta App Secret",
     webhookVerifyToken: "Webhook verify token",
     providerKeyring: "Provider AES keyring",
@@ -196,6 +198,7 @@
       legalEntityName: valueOrNull("legalEntityName"),
       supportEmail: valueOrNull("supportEmail"),
       appId: valueOrNull("appId"),
+      graphApiVersion: valueOrNull("graphApiVersion"),
       metaAppSecret: valueOrNull("metaAppSecret"),
       oauthAuthorizeUrl: valueOrNull("oauthAuthorizeUrl"),
       oauthTokenUrl: valueOrNull("oauthTokenUrl"),
@@ -217,7 +220,8 @@
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? `HTTP ${response.status}`);
       $("metaAppSecret").value = "";
-      setMessage("setup-message", body.metaAppSecretChanged ? "Setup salvo. App Secret gravado no Vault e removido do formulário." : "Setup salvo. App Secret existente foi preservado.", false);
+      const graphNote = body.graphApiVersionConfirmed ? " Graph API version foi explicitamente confirmada." : "";
+      setMessage("setup-message", (body.metaAppSecretChanged ? "Setup salvo. App Secret gravado no Vault e removido do formulário." : "Setup salvo. App Secret existente foi preservado.") + graphNote, false);
       await refreshStatus();
     } catch (error) {
       setMessage("setup-message", `Falha ao salvar: ${error instanceof Error ? error.message : "erro"}`, true);
