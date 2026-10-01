@@ -10,7 +10,9 @@ Deno.serve(async (request: Request) => {
     ? "/api/status"
     : url.pathname.endsWith("/api/setup")
       ? "/api/setup"
-      : "/";
+      : url.pathname.endsWith("/api/oauth-start")
+        ? "/api/oauth-start"
+        : "/";
 
   if (request.method === "GET" && relativePath === "/") {
     const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -32,6 +34,10 @@ Deno.serve(async (request: Request) => {
     return proxyControl(request, "setup", "POST");
   }
 
+  if (relativePath === "/api/oauth-start" && request.method === "POST") {
+    return proxyOAuthStart(request);
+  }
+
   return new Response("Not found", {
     status: 404,
     headers: securityHeaders("text/plain; charset=utf-8")
@@ -43,16 +49,8 @@ async function proxyControl(
   action: "status" | "setup",
   method: "GET" | "POST"
 ): Promise<Response> {
-  const authorization = request.headers.get("authorization");
-  if (!authorization?.startsWith("Bearer ")) {
-    return json({ error: "authentication_required" }, 401);
-  }
-
-  const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const publishableKey = defaultPublishableKey();
-  if (!supabaseUrl || !publishableKey) {
-    return json({ error: "console_runtime_not_configured" }, 503);
-  }
+  const context = runtimeContext(request);
+  if (context instanceof Response) return context;
 
   let body: string | undefined;
   if (method === "POST") {
@@ -66,13 +64,58 @@ async function proxyControl(
     }
   }
 
+  return forward(
+    `${context.supabaseUrl}/functions/v1/${CONTROL_SLUG}/${action}`,
+    method,
+    context.authorization,
+    context.publishableKey,
+    body
+  );
+}
+
+async function proxyOAuthStart(request: Request): Promise<Response> {
+  const context = runtimeContext(request);
+  if (context instanceof Response) return context;
+
+  return forward(
+    `${context.supabaseUrl}/functions/v1/instagram-oauth-start`,
+    "POST",
+    context.authorization,
+    context.publishableKey
+  );
+}
+
+function runtimeContext(request: Request):
+  | { authorization: string; supabaseUrl: string; publishableKey: string }
+  | Response {
+  const authorization = request.headers.get("authorization");
+  if (!authorization?.startsWith("Bearer ")) {
+    return json({ error: "authentication_required" }, 401);
+  }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const publishableKey = defaultPublishableKey();
+  if (!supabaseUrl || !publishableKey) {
+    return json({ error: "console_runtime_not_configured" }, 503);
+  }
+
+  return { authorization, supabaseUrl, publishableKey };
+}
+
+async function forward(
+  url: string,
+  method: "GET" | "POST",
+  authorization: string,
+  publishableKey: string,
+  body?: string
+): Promise<Response> {
   try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/${CONTROL_SLUG}/${action}`, {
+    const response = await fetch(url, {
       method,
       headers: {
         authorization,
         apikey: publishableKey,
-        ...(method === "POST" ? { "content-type": "application/json" } : {})
+        ...(body !== undefined ? { "content-type": "application/json" } : {})
       },
       ...(body !== undefined ? { body } : {})
     });
@@ -85,7 +128,7 @@ async function proxyControl(
       }
     });
   } catch {
-    return json({ error: "control_plane_unreachable" }, 503);
+    return json({ error: "upstream_unreachable" }, 503);
   }
 }
 
