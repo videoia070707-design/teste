@@ -5,11 +5,19 @@ import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
 import { getInstagramApiConfig } from "@/lib/server/instagram";
 import { getInstagramOfficialProvider } from "@/lib/server/instagram-provider";
+import { isTrustedMutationRequest } from "@/lib/server/request-security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request): Promise<Response> {
+  if (!isTrustedMutationRequest(request, process.env.APP_ORIGIN)) {
+    return Response.json(
+      { error: "cross_origin_request_forbidden" },
+      { status: 403, headers: { "cache-control": "no-store" } }
+    );
+  }
+
   const { membership } = await requireWorkspaceContext();
   if (!can(membership.role as WorkspaceRole, "connections.manage")) {
     return Response.json({ error: "forbidden" }, { status: 403 });
