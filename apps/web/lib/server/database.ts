@@ -3,6 +3,10 @@ import { createDatabaseClient, type DatabaseClient } from "@automation/storage-p
 
 let client: DatabaseClient | undefined;
 
+interface PublicDatabasePolicy {
+  defaultPoolMax: number;
+}
+
 export function getDatabase(): DatabaseClient {
   if (client) return client;
 
@@ -10,15 +14,20 @@ export function getDatabase(): DatabaseClient {
   if (!connectionString) throw new Error("DATABASE_URL is not configured.");
 
   const publicDeployment = isPublicDeployment();
-  if (publicDeployment) validateProductionDatabaseUrl(connectionString);
+  const publicPolicy = publicDeployment
+    ? validateProductionDatabaseUrl(connectionString)
+    : null;
 
   client = createDatabaseClient(connectionString, {
-    maxConnections: readPoolSize(process.env.DATABASE_POOL_MAX, publicDeployment ? 3 : 10)
+    maxConnections: readPoolSize(
+      process.env.DATABASE_POOL_MAX,
+      publicPolicy?.defaultPoolMax ?? 10
+    )
   });
   return client;
 }
 
-function validateProductionDatabaseUrl(connectionString: string): void {
+function validateProductionDatabaseUrl(connectionString: string): PublicDatabasePolicy {
   let url: URL;
   try {
     url = new URL(connectionString);
@@ -41,17 +50,25 @@ function validateProductionDatabaseUrl(connectionString: string): void {
     throw new Error("Public DATABASE_URL must use the automation_web least-privilege role.");
   }
 
+  let defaultPoolMax = 3;
   if (sharedPooler) {
     const effectivePort = url.port || "5432";
-    if (effectivePort !== "5432") {
-      throw new Error("Public Supavisor DATABASE_URL must use Session Pooler port 5432.");
+    if (effectivePort !== "5432" && effectivePort !== "6543") {
+      throw new Error("Public Supavisor DATABASE_URL must use Session port 5432 or Transaction port 6543.");
     }
+
+    // Supabase recommends transaction mode for short-lived/serverless clients.
+    // postgres.js already runs with prepare:false in @automation/storage-postgres,
+    // which is required by Supavisor transaction mode.
+    if (effectivePort === "6543") defaultPoolMax = 1;
   }
 
   const sslMode = url.searchParams.get("sslmode")?.toLowerCase();
   if (sslMode !== "require" && sslMode !== "verify-ca" && sslMode !== "verify-full") {
     throw new Error("Public DATABASE_URL must enforce PostgreSQL TLS.");
   }
+
+  return { defaultPoolMax };
 }
 
 function readPoolSize(raw: string | undefined, fallback: number): number {
