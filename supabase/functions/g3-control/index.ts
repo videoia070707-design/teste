@@ -49,17 +49,12 @@ Deno.serve(async (request: Request) => {
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: cors });
   }
-
-  if (!originAllowed(request)) {
-    return json({ error: "origin_not_allowed" }, 403, cors);
-  }
+  if (!originAllowed(request)) return json({ error: "origin_not_allowed" }, 403, cors);
 
   const url = new URL(request.url);
   const isStatus = request.method === "GET" && url.pathname.endsWith("/status");
   const isSetup = request.method === "POST" && url.pathname.endsWith("/setup");
-  if (!isStatus && !isSetup) {
-    return json({ error: "not_found" }, 404, cors);
-  }
+  if (!isStatus && !isSetup) return json({ error: "not_found" }, 404, cors);
 
   const authorization = request.headers.get("authorization");
   if (!authorization?.startsWith("Bearer ")) {
@@ -69,22 +64,18 @@ Deno.serve(async (request: Request) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const publishableKey = defaultPublishableKey();
   const databaseUrl = Deno.env.get("SUPABASE_DB_URL");
-
   if (!supabaseUrl || !publishableKey || !databaseUrl) {
     return json({ error: "runtime_not_configured" }, 503, cors);
   }
 
+  const token = authorization.slice("Bearer ".length).trim();
   const authClient = createClient(supabaseUrl, publishableKey, {
     global: { headers: { Authorization: authorization } },
     auth: { persistSession: false, autoRefreshToken: false }
   });
-
-  const token = authorization.slice("Bearer ".length).trim();
   const { data: userData, error: userError } = await authClient.auth.getUser(token);
   const user = userData.user;
-  if (userError || !user) {
-    return json({ error: "authentication_invalid" }, 401, cors);
-  }
+  if (userError || !user) return json({ error: "authentication_invalid" }, 401, cors);
 
   const sql = postgres(databaseUrl, {
     max: 1,
@@ -95,15 +86,14 @@ Deno.serve(async (request: Request) => {
 
   try {
     const membership = await ensureWorkspaceMembership(sql, user.id);
-
     if (membership.role !== "owner" && membership.role !== "admin") {
       return json({ error: "admin_role_required" }, 403, cors);
     }
 
     if (isSetup) {
-      const inputResult = await parseSetupRequest(request);
-      if (!inputResult.ok) return json({ error: inputResult.error }, 400, cors);
-      const input = inputResult.value;
+      const parsed = await parseSetupRequest(request);
+      if (!parsed.ok) return json({ error: parsed.error }, 400, cors);
+      const input = parsed.value;
 
       await sql.begin(async (tx) => {
         await tx`select app_private.set_platform_public_config('legal_entity_name', ${input.legalEntityName})`;
@@ -124,12 +114,7 @@ Deno.serve(async (request: Request) => {
 
         await tx`
           insert into app_private.audit_logs (
-            workspace_id,
-            actor_user_id,
-            action,
-            resource_type,
-            resource_id,
-            metadata
+            workspace_id, actor_user_id, action, resource_type, resource_id, metadata
           ) values (
             ${membership.workspace_id},
             ${user.id},
@@ -138,19 +123,9 @@ Deno.serve(async (request: Request) => {
             ${PROVIDER_KEY},
             ${tx.json({
               source: "g3-control",
-              fields: [
-                "legal_entity_name",
-                "support_email",
-                "app_id",
-                "graph_api_version",
-                "oauth_authorize_url",
-                "oauth_token_url",
-                "oauth_token_encoding",
-                "long_lived_token_url",
-                "identity_probe_path"
-              ],
-              secretFieldsChanged: input.metaAppSecret !== null ? ["meta_app_secret"] : [],
-              secretsChanged: input.metaAppSecret !== null
+              graphApiVersionConfirmed: input.graphApiVersion !== null,
+              metaAppSecretChanged: input.metaAppSecret !== null,
+              identityProbeConfigured: input.identityProbePath !== null
             })}
           )
         `;
@@ -185,18 +160,13 @@ async function ensureWorkspaceMembership(
     await tx`select pg_advisory_xact_lock(hashtextextended(${userId}, 0))`;
 
     const [existing] = await tx<MembershipRow[]>`
-      select
-        membership.workspace_id,
-        workspace.name as workspace_name,
-        membership.role
+      select membership.workspace_id, workspace.name as workspace_name, membership.role
       from app_private.workspace_members membership
-      join app_private.workspaces workspace
-        on workspace.id = membership.workspace_id
+      join app_private.workspaces workspace on workspace.id = membership.workspace_id
       where membership.user_id = ${userId}
       order by membership.created_at asc, membership.workspace_id asc
       limit 1
     `;
-
     if (existing) return existing;
 
     const [workspace] = await tx<{ id: string; name: string }[]>`
@@ -204,19 +174,13 @@ async function ensureWorkspaceMembership(
       values ('Meu Workspace')
       returning id, name
     `;
-
     if (!workspace) throw new Error("WORKSPACE_BOOTSTRAP_FAILED");
 
     await tx`
       insert into app_private.workspace_members (workspace_id, user_id, role)
       values (${workspace.id}, ${userId}, 'owner')
     `;
-
-    return {
-      workspace_id: workspace.id,
-      workspace_name: workspace.name,
-      role: "owner"
-    };
+    return { workspace_id: workspace.id, workspace_name: workspace.name, role: "owner" };
   });
 }
 
@@ -228,20 +192,17 @@ async function buildStatus(
   const [state] = await sql<ReadinessRow[]>`
     select
       exists (
-        select 1
-        from app_private.worker_heartbeats
+        select 1 from app_private.worker_heartbeats
         where coalesce(worker_kind, service) = 'supabase_g3_runtime'
           and last_seen_at >= now() - interval '45 seconds'
       ) as edge_runtime_fresh,
       exists (
-        select 1
-        from app_private.provider_runtime_config
+        select 1 from app_private.provider_runtime_config
         where provider_key = ${PROVIDER_KEY}
           and nullif(btrim(app_id), '') is not null
       ) as app_id,
       exists (
-        select 1
-        from app_private.provider_runtime_config
+        select 1 from app_private.provider_runtime_config
         where provider_key = ${PROVIDER_KEY}
           and nullif(btrim(graph_api_version), '') is not null
           and graph_api_version_confirmed_at is not null
@@ -250,46 +211,39 @@ async function buildStatus(
       app_private.get_platform_secret('meta_webhook_verify_token') is not null as webhook_verify_token,
       app_private.get_platform_secret('provider_secret_keyring') is not null as provider_keyring,
       exists (
-        select 1
-        from app_private.provider_runtime_config
+        select 1 from app_private.provider_runtime_config
         where provider_key = ${PROVIDER_KEY}
           and nullif(btrim(oauth_authorize_url), '') is not null
       ) as oauth_authorize,
       exists (
-        select 1
-        from app_private.provider_runtime_config
+        select 1 from app_private.provider_runtime_config
         where provider_key = ${PROVIDER_KEY}
           and nullif(btrim(oauth_token_url), '') is not null
       ) as oauth_token,
       exists (
-        select 1
-        from app_private.provider_runtime_config
+        select 1 from app_private.provider_runtime_config
         where provider_key = ${PROVIDER_KEY}
           and nullif(btrim(long_lived_token_url), '') is not null
       ) as long_lived_token,
       exists (
-        select 1
-        from app_private.provider_runtime_config
+        select 1 from app_private.provider_runtime_config
         where provider_key = ${PROVIDER_KEY}
           and nullif(btrim(identity_probe_path), '') is not null
       ) as identity_probe,
       exists (
-        select 1
-        from app_private.platform_public_config
+        select 1 from app_private.platform_public_config
         where config_key = 'legal_entity_name'
           and nullif(btrim(config_value), '') is not null
       ) as legal_entity,
       exists (
-        select 1
-        from app_private.platform_public_config
+        select 1 from app_private.platform_public_config
         where config_key = 'support_email'
           and nullif(btrim(config_value), '') is not null
       ) as support_email,
       exists (
         select 1
         from app_private.channel_connections connection
-        join app_private.connection_secret_refs secret_ref
-          on secret_ref.connection_id = connection.id
+        join app_private.connection_secret_refs secret_ref on secret_ref.connection_id = connection.id
         where connection.workspace_id = ${membership.workspace_id}
           and connection.provider_key = ${PROVIDER_KEY}
           and connection.provider_mode = 'official'
@@ -297,15 +251,13 @@ async function buildStatus(
           and connection.external_account_id is not null
       ) as oauth_live,
       exists (
-        select 1
-        from app_private.raw_events raw
+        select 1 from app_private.raw_events raw
         where raw.workspace_id = ${membership.workspace_id}
           and raw.provider = ${PROVIDER_KEY}
           and raw.signature_valid = true
       ) as signed_webhook_live,
       exists (
-        select 1
-        from app_private.canonical_events event
+        select 1 from app_private.canonical_events event
         where event.workspace_id = ${membership.workspace_id}
           and event.provider = ${PROVIDER_KEY}
           and event.event_type = 'message.received'
@@ -313,8 +265,7 @@ async function buildStatus(
       exists (
         select 1
         from app_private.messages message
-        join app_private.channel_connections connection
-          on connection.id = message.connection_id
+        join app_private.channel_connections connection on connection.id = message.connection_id
         where message.workspace_id = ${membership.workspace_id}
           and connection.provider_key = ${PROVIDER_KEY}
           and connection.provider_mode = 'official'
@@ -324,10 +275,12 @@ async function buildStatus(
           and message.provider_message_id is not null
       ) as outbound_live
   `;
-
   if (!state) return json({ error: "status_unavailable" }, 503, cors);
 
-  const configurationReady = state.edge_runtime_fresh
+  // Identity probe is intentionally NOT an OAuth precondition. It remains a
+  // health diagnostic: without a documented/validated probe the connection
+  // cannot become HEALTHY, but real OAuth/inbound/outbound HOST PASS may proceed.
+  const oauthConfigurationReady = state.edge_runtime_fresh
     && state.app_id
     && state.graph_api_version_confirmed
     && state.meta_app_secret
@@ -336,7 +289,6 @@ async function buildStatus(
     && state.oauth_authorize
     && state.oauth_token
     && state.long_lived_token
-    && state.identity_probe
     && state.legal_entity
     && state.support_email;
 
@@ -348,7 +300,9 @@ async function buildStatus(
       name: membership.workspace_name,
       role: membership.role
     },
-    configurationReady,
+    configurationReady: oauthConfigurationReady,
+    oauthConfigurationReady,
+    healthProbeReady: state.identity_probe,
     hostPass,
     configuration: {
       edgeRuntime: state.edge_runtime_fresh,
@@ -382,8 +336,8 @@ async function parseSetupRequest(request: Request): Promise<
     return { ok: false, error: "json_content_type_required" };
   }
 
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(contentLength) && contentLength > MAX_SETUP_BODY_BYTES) {
+  const length = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(length) && length > MAX_SETUP_BODY_BYTES) {
     return { ok: false, error: "request_too_large" };
   }
 
@@ -397,7 +351,6 @@ async function parseSetupRequest(request: Request): Promise<
   } catch {
     return { ok: false, error: "invalid_json_body" };
   }
-
   if (!isRecord(body)) return { ok: false, error: "invalid_json_body" };
 
   try {
@@ -431,32 +384,32 @@ function optionalString(value: unknown, maxLength: number): string | null {
 }
 
 function optionalEmail(value: unknown): string | null {
-  const normalized = optionalString(value, 320);
-  if (normalized === null) return null;
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) throw new Error("SUPPORT_EMAIL_INVALID");
-  return normalized;
+  const valueString = optionalString(value, 320);
+  if (valueString === null) return null;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(valueString)) throw new Error("SUPPORT_EMAIL_INVALID");
+  return valueString;
 }
 
 function optionalPattern(value: unknown, pattern: RegExp): string | null {
-  const normalized = optionalString(value, 200);
-  if (normalized === null) return null;
-  if (!pattern.test(normalized)) throw new Error("FIELD_FORMAT_INVALID");
-  return normalized;
+  const valueString = optionalString(value, 200);
+  if (valueString === null) return null;
+  if (!pattern.test(valueString)) throw new Error("FIELD_FORMAT_INVALID");
+  return valueString;
 }
 
 function optionalSecret(value: unknown): string | null {
-  const normalized = optionalString(value, 512);
-  if (normalized === null) return null;
-  if (normalized.length < 16) throw new Error("META_APP_SECRET_INVALID_LENGTH");
-  return normalized;
+  const valueString = optionalString(value, 512);
+  if (valueString === null) return null;
+  if (valueString.length < 16) throw new Error("META_APP_SECRET_INVALID_LENGTH");
+  return valueString;
 }
 
 function optionalHttpsUrl(value: unknown): string | null {
-  const normalized = optionalString(value, 2_000);
-  if (normalized === null) return null;
+  const valueString = optionalString(value, 2_000);
+  if (valueString === null) return null;
   let url: URL;
   try {
-    url = new URL(normalized);
+    url = new URL(valueString);
   } catch {
     throw new Error("URL_INVALID");
   }
@@ -471,12 +424,12 @@ function tokenEncoding(value: unknown): "multipart" | "urlencoded" {
 }
 
 function optionalProbePath(value: unknown): string | null {
-  const normalized = optionalString(value, 500);
-  if (normalized === null) return null;
-  if (!normalized.startsWith("/") || normalized.startsWith("//") || normalized.includes("\\")) {
+  const valueString = optionalString(value, 500);
+  if (valueString === null) return null;
+  if (!valueString.startsWith("/") || valueString.startsWith("//") || valueString.includes("\\")) {
     throw new Error("IDENTITY_PROBE_PATH_INVALID");
   }
-  return normalized;
+  return valueString;
 }
 
 function validationCode(error: unknown): string {
@@ -497,17 +450,15 @@ function defaultPublishableKey(): string | null {
       const value = parsed.default;
       if (typeof value === "string" && value) return value;
     } catch {
-      // Fall through to the legacy public key while hosted projects still expose it.
+      // Fall through to hosted legacy anon key.
     }
   }
-
   return Deno.env.get("SUPABASE_ANON_KEY") ?? null;
 }
 
 function originAllowed(request: Request): boolean {
   const origin = request.headers.get("origin");
   if (!origin) return true;
-
   try {
     const url = new URL(origin);
     return url.protocol === "http:"
@@ -532,9 +483,6 @@ function corsHeaders(request: Request): HeadersInit {
 function json(body: unknown, status: number, headers: HeadersInit): Response {
   return Response.json(body, {
     status,
-    headers: {
-      ...headers,
-      "content-type": "application/json; charset=utf-8"
-    }
+    headers: { ...headers, "content-type": "application/json; charset=utf-8" }
   });
 }
