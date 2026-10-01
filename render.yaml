@@ -22,7 +22,7 @@ services:
       - key: NEXT_PUBLIC_SUPABASE_URL
         value: https://cqtrigqlktekczbbsxiy.supabase.co
       - key: NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
-        sync: false
+        value: sb_publishable_YvoQENFFqgNkiH2xZxBB5Q_vb0kNyS_
       - key: GOOGLE_AUTH_ENABLED
         value: 'false'
       - key: DATABASE_URL
