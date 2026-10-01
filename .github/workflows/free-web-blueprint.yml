@@ -67,7 +67,9 @@ jobs:
           abort "DATABASE_URL must remain an operator-supplied secret" unless database_url && database_url["sync"] == false
 
           publishable_key = envs.find { |entry| entry["key"] == "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY" }
-          abort "publishable key must not be committed in render.yaml" unless publishable_key && publishable_key["sync"] == false
+          publishable_value = publishable_key && publishable_key["value"].to_s
+          abort "modern Supabase publishable key is required" unless publishable_value.start_with?("sb_publishable_")
+          abort "legacy anon JWT must not be committed as the publishable key" if publishable_value.start_with?("eyJ")
 
           database_pool = envs.find { |entry| entry["key"] == "DATABASE_POOL_MAX" }
           abort "free web database pool must remain capped at 3" unless database_pool && database_pool["value"].to_s == "3"
