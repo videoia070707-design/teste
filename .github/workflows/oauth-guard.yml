@@ -1,0 +1,158 @@
+name: OAuth Consumption Guard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'database/**'
+      - '.github/workflows/oauth-guard.yml'
+  pull_request:
+    paths:
+      - 'database/**'
+      - '.github/workflows/oauth-guard.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: automation_oauth_guard_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d automation_oauth_guard_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/automation_oauth_guard_ci
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare Supabase database stubs
+        shell: bash
+        run: |
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
+          end
+          $$;
+          create schema if not exists auth;
+          create table if not exists auth.users (
+            id uuid primary key,
+            email text,
+            created_at timestamptz not null default now()
+          );
+          SQL
+
+      - name: Apply portable migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for migration in database/*.sql; do
+            echo "Applying $migration"
+            psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f "$migration"
+          done
+
+      - name: Prove OAuth state consumption follows current membership
+        shell: bash
+        run: |
+          psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          do $$
+          declare
+            actor_id uuid := gen_random_uuid();
+            workspace_id uuid;
+            affected integer;
+            consumed timestamptz;
+          begin
+            insert into auth.users (id, email)
+            values (actor_id, 'oauth-guard@example.test');
+
+            insert into app_private.workspaces (name)
+            values ('OAuth Guard CI')
+            returning id into workspace_id;
+
+            insert into app_private.oauth_sessions (
+              workspace_id,
+              initiated_by_user_id,
+              provider,
+              state_hash,
+              expires_at
+            ) values (
+              workspace_id,
+              actor_id,
+              'instagram.meta.official',
+              repeat('c', 64),
+              now() + interval '10 minutes'
+            );
+
+            update app_private.oauth_sessions
+            set consumed_at = now()
+            where provider = 'instagram.meta.official'
+              and state_hash = repeat('c', 64)
+              and consumed_at is null;
+            get diagnostics affected = row_count;
+            if affected <> 0 then
+              raise exception 'OAuth state was consumed without owner/admin membership';
+            end if;
+
+            select consumed_at into consumed
+            from app_private.oauth_sessions
+            where provider = 'instagram.meta.official'
+              and state_hash = repeat('c', 64);
+            if consumed is not null then
+              raise exception 'suppressed OAuth state unexpectedly persisted consumed_at';
+            end if;
+
+            insert into app_private.workspace_members (workspace_id, user_id, role)
+            values (workspace_id, actor_id, 'owner');
+
+            update app_private.oauth_sessions
+            set consumed_at = now()
+            where provider = 'instagram.meta.official'
+              and state_hash = repeat('c', 64)
+              and consumed_at is null;
+            get diagnostics affected = row_count;
+            if affected <> 1 then
+              raise exception 'owner could not consume valid OAuth state';
+            end if;
+
+            update app_private.workspace_members
+            set role = 'viewer'
+            where workspace_id = workspace_id
+              and user_id = actor_id;
+
+            insert into app_private.oauth_sessions (
+              workspace_id,
+              initiated_by_user_id,
+              provider,
+              state_hash,
+              expires_at
+            ) values (
+              workspace_id,
+              actor_id,
+              'instagram.meta.official',
+              repeat('d', 64),
+              now() + interval '10 minutes'
+            );
+
+            update app_private.oauth_sessions
+            set consumed_at = now()
+            where provider = 'instagram.meta.official'
+              and state_hash = repeat('d', 64)
+              and consumed_at is null;
+            get diagnostics affected = row_count;
+            if affected <> 0 then
+              raise exception 'viewer was allowed to consume OAuth state';
+            end if;
+          end
+          $$;
+          SQL
