@@ -7,12 +7,14 @@ Ferramenta de HOST PASS do Instagram Official usando o runtime gratuito do Supab
 1. Baixe/clone o repositório.
 2. Abra `tools/g3-console`.
 3. Dê duplo clique em `start-windows.cmd`.
-4. O navegador abrirá `http://127.0.0.1:4173/`.
+4. O navegador abrirá `http://127.0.0.1:3000/`.
 5. Mantenha a janela do launcher aberta enquanto usa o console; `Ctrl+C` encerra o servidor.
 
-O launcher tenta Node.js primeiro e usa Python 3 como fallback. Ele faz bind somente em `127.0.0.1`; não publica o console na rede e não exige Render, Replit ou outro serviço pago.
+O launcher usa o servidor canônico `scripts/g3-console-server.mjs`, já validado pelo workflow `G3 Console`. Ele faz bind somente em `127.0.0.1`, aplica CSP/headers de segurança e não exige Render, Replit ou outro serviço pago.
 
-Não abra `index.html` diretamente via `file://`: Auth e CORS do G3 foram deliberadamente limitados a origem localhost.
+É necessário ter Node.js instalado, que já faz parte do ambiente de desenvolvimento do projeto.
+
+Não abra `index.html` diretamente via `file://`: Auth e CORS do G3 foram deliberadamente limitados à origem localhost.
 
 ## Segurança
 
