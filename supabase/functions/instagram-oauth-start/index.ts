@@ -19,6 +19,8 @@ interface MembershipRow {
 interface ProviderConfigRow {
   app_id: string | null;
   oauth_authorize_url: string | null;
+  oauth_token_url: string | null;
+  long_lived_token_url: string | null;
 }
 
 Deno.serve(async (request: Request) => {
@@ -73,26 +75,36 @@ Deno.serve(async (request: Request) => {
     }
 
     const [config] = await sql<ProviderConfigRow[]>`
-      select app_id, oauth_authorize_url
+      select app_id, oauth_authorize_url, oauth_token_url, long_lived_token_url
       from app_private.provider_runtime_config
       where provider_key = ${PROVIDER_KEY}
       limit 1
     `;
+    const [secretState] = await sql<{ meta_app_secret_ready: boolean }[]>`
+      select app_private.get_platform_secret('meta_app_secret') is not null as meta_app_secret_ready
+    `;
 
     const appId = config?.app_id?.trim() ?? "";
     const authorizeEndpoint = config?.oauth_authorize_url?.trim() ?? "";
-    if (!appId || !authorizeEndpoint) {
+    const tokenEndpoint = config?.oauth_token_url?.trim() ?? "";
+    const longLivedTokenEndpoint = config?.long_lived_token_url?.trim() ?? "";
+
+    if (
+      !appId
+      || !authorizeEndpoint
+      || !tokenEndpoint
+      || !longLivedTokenEndpoint
+      || !secretState?.meta_app_secret_ready
+    ) {
       return json({ error: "instagram_oauth_configuration_incomplete" }, 409, cors);
     }
 
-    let authorizationBase: URL;
-    try {
-      authorizationBase = new URL(authorizeEndpoint);
-    } catch {
-      return json({ error: "instagram_oauth_authorize_url_invalid" }, 503, cors);
-    }
-    if (authorizationBase.protocol !== "https:") {
-      return json({ error: "instagram_oauth_authorize_url_invalid" }, 503, cors);
+    if (
+      !validHttpsUrl(authorizeEndpoint)
+      || !validHttpsUrl(tokenEndpoint)
+      || !validHttpsUrl(longLivedTokenEndpoint)
+    ) {
+      return json({ error: "instagram_oauth_configuration_invalid" }, 503, cors);
     }
 
     const state = randomState();
@@ -142,7 +154,7 @@ Deno.serve(async (request: Request) => {
       `;
     });
 
-    const authorizationUrl = new URL(authorizationBase);
+    const authorizationUrl = new URL(authorizeEndpoint);
     authorizationUrl.searchParams.set("client_id", appId);
     authorizationUrl.searchParams.set("redirect_uri", redirectUri);
     authorizationUrl.searchParams.set("response_type", "code");
@@ -216,6 +228,14 @@ function randomState(): string {
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function validHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function defaultPublishableKey(): string | null {
