@@ -27,11 +27,19 @@ export async function GET(): Promise<Response> {
           false
         ) as app_private_usage,
         coalesce(
-          has_table_privilege(current_user, 'app_private.provider_runtime_config', 'select'),
+          has_table_privilege(
+            current_user,
+            to_regclass('app_private.provider_runtime_config'),
+            'select'
+          ),
           false
         ) as provider_config_read,
         coalesce(
-          has_table_privilege(current_user, 'app_private.runtime_invocation_tokens', 'select'),
+          has_table_privilege(
+            current_user,
+            to_regclass('app_private.runtime_invocation_tokens'),
+            'select'
+          ),
           false
         ) as runtime_token_read,
         coalesce(
