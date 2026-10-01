@@ -55,7 +55,7 @@ Não há worker pago obrigatório no G3 atual.
 
 ## Web Free
 
-O repositório contém `render.yaml` para um único web service gratuito. O web hospeda dashboard/Auth/OAuth/legal, enquanto callbacks críticos do provider e runtime assíncrono continuam no Supabase.
+O repositório contém `render.yaml` para um único web service gratuito. O web hospeda dashboard/Auth/OAuth, enquanto callbacks críticos do provider, superfícies legais públicas e runtime assíncrono continuam no Supabase.
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https%3A%2F%2Fgithub.com%2Fvideoia070707-design%2Fteste)
 
@@ -63,16 +63,19 @@ O botão acima apenas abre a revisão do Blueprint na conta Render. O `render.ya
 
 O Blueprint do Render foi reduzido deliberadamente. Ele não recebe App ID, endpoints Instagram, Graph version ou secrets Meta.
 
-Configuração necessária no serviço web:
+Entradas manuais do operador no Blueprint:
 
-- `APP_ORIGIN` derivada da URL pública do serviço;
-- `NEXT_PUBLIC_SUPABASE_URL`;
-- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` fornecida no deploy, não commitada;
-- `DATABASE_URL` com a role `automation_web` via Supavisor;
+- `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`;
+- `DATABASE_URL` com a role `automation_web` via Supavisor.
+
+Valores fixos/derivados pelo Blueprint:
+
+- `APP_ORIGIN` a partir da URL pública do próprio serviço;
+- `NEXT_PUBLIC_SUPABASE_URL` do projeto G3;
 - `DATABASE_POOL_MAX=3`;
-- `LEGAL_ENTITY_NAME`;
-- `SUPPORT_EMAIL`;
 - `GOOGLE_AUTH_ENABLED=false` enquanto Google OAuth não estiver configurado.
+
+`legal_entity_name` e `support_email` pertencem a `app_private.platform_public_config` no Supabase e não são secrets/envs do Render.
 
 O workflow **Free Web Blueprint** impede provider config/secrets de voltarem para o Render e impede provisioning pago acidental.
 
