@@ -88,6 +88,45 @@ jobs:
             }
           done
 
+      - name: Validate G3 Edge outbound safety policy
+        shell: ruby {0}
+        run: |
+          source = File.read("supabase/functions/g3-runtime/index.ts")
+
+          required = {
+            "max attempts" => "const OUTBOUND_MAX_ATTEMPTS = 5;",
+            "lease duration" => "const OUTBOUND_LEASE_SECONDS = 45;",
+            "retry schedule" => "const delays = [15, 60, 300, 1800];",
+            "ambiguous success" => "AMBIGUOUS_PROVIDER_SUCCESS_WITHOUT_ID",
+            "timeout after dispatch" => "PROVIDER_TIMEOUT_AFTER_DISPATCH",
+            "transport closed after dispatch" => "PROVIDER_TRANSPORT_CLOSED_AFTER_DISPATCH",
+            "ambiguous provider 5xx" => 'HTTP_${response.status}_AMBIGUOUS',
+            "post-dispatch persistence guard" => "Deliberately preserve PROCESSING"
+          }
+
+          missing = required.reject { |_label, needle| source.include?(needle) }
+          unless missing.empty?
+            abort "G3 Edge outbound safety policy drifted: #{missing.keys.join(', ')}"
+          end
+
+          quarantine_start = source.index("async function quarantineExpiredOutbound")
+          quarantine_end = source.index("async function processOutbound", quarantine_start || 0)
+          abort "quarantineExpiredOutbound function not found" unless quarantine_start && quarantine_end
+          quarantine = source[quarantine_start...quarantine_end]
+
+          quarantine_required = {
+            "PROCESSING source state" => "delivery_state = 'PROCESSING'",
+            "unknown destination state" => "delivery_state = 'SEND_RESULT_UNKNOWN'",
+            "reconciliation required" => "reconciliation_required = true",
+            "lease-expiry evidence" => "EDGE_LEASE_EXPIRED_AFTER_DISPATCH_POSSIBLE"
+          }
+          missing_quarantine = quarantine_required.reject { |_label, needle| quarantine.include?(needle) }
+          unless missing_quarantine.empty?
+            abort "Expired outbound lease no longer fails safely: #{missing_quarantine.keys.join(', ')}"
+          end
+
+          puts "G3 Edge outbound ambiguity policy is locked: max=5, lease=45s, backoff=15/60/300/1800, no blind retry after ambiguous dispatch."
+
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.1.4
