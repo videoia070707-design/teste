@@ -12,6 +12,7 @@ interface SetupInput {
   supportEmail: string | null;
   appId: string | null;
   metaAppSecret: string | null;
+  graphApiVersion: string | null;
   oauthAuthorizeUrl: string | null;
   oauthTokenUrl: string | null;
   oauthTokenEncoding: "multipart" | "urlencoded";
@@ -36,11 +37,15 @@ export async function POST(request: Request): Promise<Response> {
   let input: SetupInput;
 
   try {
+    const confirmGraphApiVersion = form.get("confirmGraphApiVersion") === "yes";
     input = {
       legalEntityName: optionalString(form.get("legalEntityName"), 200),
       supportEmail: optionalEmail(form.get("supportEmail")),
       appId: optionalPattern(form.get("appId"), /^[0-9]{4,40}$/),
       metaAppSecret: optionalSecret(form.get("metaAppSecret")),
+      graphApiVersion: confirmGraphApiVersion
+        ? requiredPattern(form.get("graphApiVersion"), /^v[0-9]{1,3}\.[0-9]{1,3}$/, "GRAPH_API_VERSION_INVALID")
+        : null,
       oauthAuthorizeUrl: optionalHttpsUrl(form.get("oauthAuthorizeUrl")),
       oauthTokenUrl: optionalHttpsUrl(form.get("oauthTokenUrl")),
       oauthTokenEncoding: tokenEncoding(form.get("oauthTokenEncoding")),
@@ -60,6 +65,7 @@ export async function POST(request: Request): Promise<Response> {
     await tx`select app_private.set_platform_public_config('support_email', ${input.supportEmail})`;
     await tx`select app_private.set_instagram_platform_config(
       ${input.appId},
+      ${input.graphApiVersion},
       ${input.oauthAuthorizeUrl},
       ${input.oauthTokenUrl},
       ${input.oauthTokenEncoding},
@@ -96,6 +102,8 @@ export async function POST(request: Request): Promise<Response> {
             'long_lived_token_url',
             'identity_probe_path'
           ],
+          graphApiVersionConfirmed: input.graphApiVersion !== null,
+          graphApiVersion: input.graphApiVersion,
           secretFieldsChanged: input.metaAppSecret !== null ? ['meta_app_secret'] : [],
           secretsChanged: input.metaAppSecret !== null
         })}
@@ -105,6 +113,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const target = new URL("/settings", getAppOrigin(request));
   target.searchParams.set("saved", "1");
+  if (input.graphApiVersion !== null) target.searchParams.set("graphVersionConfirmed", "1");
   return NextResponse.redirect(target, { status: 303 });
 }
 
@@ -127,6 +136,16 @@ function optionalPattern(value: FormDataEntryValue | null, pattern: RegExp): str
   const normalized = optionalString(value, 200);
   if (normalized === null) return null;
   if (!pattern.test(normalized)) throw new Error("FIELD_FORMAT_INVALID");
+  return normalized;
+}
+
+function requiredPattern(
+  value: FormDataEntryValue | null,
+  pattern: RegExp,
+  errorCode: string
+): string {
+  const normalized = optionalString(value, 200);
+  if (normalized === null || !pattern.test(normalized)) throw new Error(errorCode);
   return normalized;
 }
 
