@@ -38,6 +38,7 @@ jobs:
             012_foreign_key_indexes.sql
             021_meta_compliance.sql
             025_platform_public_config.sql
+            026_oauth_consumption_membership_guard.sql
           )
           mapfile -t actual < <(find database -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
           test "${#actual[@]}" -eq "${#expected[@]}"
@@ -68,6 +69,7 @@ jobs:
             023_instagram_platform_config.sql
             024_worker_heartbeats_primary_key.sql
             025_platform_public_config.sql
+            026_oauth_consumption_membership_guard.sql
           )
           mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
           test "${#actual[@]}" -eq "${#expected[@]}"
@@ -75,14 +77,12 @@ jobs:
             test "${actual[$i]}" = "${expected[$i]}"
           done
 
-          cmp --silent database/021_meta_compliance.sql supabase/migrations/021_meta_compliance.sql || {
-            echo 'Portable migration 021 drifted between database/ and supabase/migrations/.' >&2
-            exit 1
-          }
-          cmp --silent database/025_platform_public_config.sql supabase/migrations/025_platform_public_config.sql || {
-            echo 'Portable migration 025 drifted between database/ and supabase/migrations/.' >&2
-            exit 1
-          }
+          for shared in 021_meta_compliance.sql 025_platform_public_config.sql 026_oauth_consumption_membership_guard.sql; do
+            cmp --silent "database/$shared" "supabase/migrations/$shared" || {
+              echo "Portable migration $shared drifted between database/ and supabase/migrations/." >&2
+              exit 1
+            }
+          done
 
       - uses: denoland/setup-deno@v2
         with:
