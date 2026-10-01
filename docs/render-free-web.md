@@ -32,7 +32,7 @@ No Supabase Dashboard do projeto `cqtrigqlktekczbbsxiy`:
 1. Abra **Connect**.
 2. Selecione **Session pooler** / Supavisor em porta `5432`.
 3. Copie o hostname exato mostrado pelo Dashboard. Não adivinhe o hostname regional.
-4. Em **Vault**, revele/copiei o valor do secret `automation_web_db_password` diretamente para o seu gerenciador de senhas/clipboard.
+4. Em **Vault**, revele e copie o valor do secret `automation_web_db_password` diretamente para o seu gerenciador de senhas/clipboard.
 5. Não cole essa senha em issue, commit, chat ou arquivo do repositório.
 
 Monte localmente a URL no formato:
