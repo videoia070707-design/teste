@@ -1,4 +1,3 @@
-import { can, type WorkspaceRole } from "@automation/core";
 import { requireWorkspaceContext } from "@/lib/server/auth";
 import { getDatabase } from "@/lib/server/database";
 
@@ -7,9 +6,41 @@ export const dynamic = "force-dynamic";
 const PROVIDER_KEY = "instagram.meta.official";
 
 export default async function SettingsPage() {
-  const { membership } = await requireWorkspaceContext();
+  const { userId, membership } = await requireWorkspaceContext();
   const sql = getDatabase();
-  const canManage = can(membership.role as WorkspaceRole, "connections.manage");
+  const [operatorAccess] = await sql<{ allowed: boolean }[]>`
+    select app_private.is_platform_operator(${userId}) as allowed
+  `;
+  const canManage = operatorAccess?.allowed === true;
+
+  if (!canManage) {
+    return (
+      <>
+        <header className="page-header">
+          <div className="header-copy">
+            <div className="eyebrow">Settings / {membership.workspaceName}</div>
+            <h1>Setup Center</h1>
+            <p>Configuração global do control plane da plataforma.</p>
+          </div>
+          <span className="badge muted">Platform operator required</span>
+        </header>
+
+        <section className="section">
+          <article className="card">
+            <div className="eyebrow">Global boundary</div>
+            <h2>Acesso somente para operador da plataforma</h2>
+            <p>
+              Workspace owner/admin continua administrando conexões e automações do próprio workspace,
+              mas não pode alterar App ID, App Secret, endpoints OAuth, Graph version ou identidade legal global.
+            </p>
+            <div className="notice warning">
+              O acesso ao Setup Center é separado do RBAC do tenant. Nenhuma configuração global ou estado de secret foi consultado nesta página.
+            </div>
+          </article>
+        </section>
+      </>
+    );
+  }
 
   const publicRows = await sql<{ config_key: string; config_value: string | null }[]>`
     select config_key, config_value
@@ -71,7 +102,7 @@ export default async function SettingsPage() {
           <h1>Setup Center</h1>
           <p>Configuração operacional do HOST PASS. Segredos ficam no Supabase Vault e nunca são exibidos novamente pela interface.</p>
         </div>
-        <span className={`badge ${canManage ? "accent" : "muted"}`}>{canManage ? "Owner/Admin" : "Read only"}</span>
+        <span className="badge accent">Platform Operator</span>
       </header>
 
       <section className="section grid two">
@@ -110,7 +141,6 @@ export default async function SettingsPage() {
                 name="legalEntityName"
                 maxLength={200}
                 defaultValue={publicConfig.get("legal_entity_name") ?? ""}
-                disabled={!canManage}
                 placeholder="Nome real do operador da plataforma"
               />
             </div>
@@ -123,7 +153,6 @@ export default async function SettingsPage() {
                 type="email"
                 maxLength={320}
                 defaultValue={publicConfig.get("support_email") ?? ""}
-                disabled={!canManage}
                 placeholder="suporte@seudominio.com"
               />
             </div>
@@ -139,7 +168,6 @@ export default async function SettingsPage() {
                 inputMode="numeric"
                 pattern="[0-9]{4,40}"
                 defaultValue={provider?.app_id ?? ""}
-                disabled={!canManage}
                 placeholder="ID numérico do App Meta"
               />
             </div>
@@ -153,7 +181,6 @@ export default async function SettingsPage() {
                 minLength={16}
                 maxLength={512}
                 autoComplete="new-password"
-                disabled={!canManage}
                 placeholder={secretState?.meta_app_secret_ready ? "Já configurado — deixe vazio para manter" : "Cole o App Secret uma única vez"}
               />
               <p className="muted">Write-only: deixar vazio mantém o secret atual. O valor nunca é renderizado de volta.</p>
@@ -168,7 +195,6 @@ export default async function SettingsPage() {
                 id="oauthTokenEncoding"
                 name="oauthTokenEncoding"
                 defaultValue={provider?.oauth_token_encoding ?? "multipart"}
-                disabled={!canManage}
               >
                 <option value="multipart">multipart</option>
                 <option value="urlencoded">urlencoded</option>
@@ -183,7 +209,6 @@ export default async function SettingsPage() {
                 pattern="v[0-9]{1,3}\\.[0-9]{1,3}"
                 maxLength={12}
                 defaultValue={provider?.graph_api_version ?? ""}
-                disabled={!canManage}
                 placeholder="v26.0"
               />
               <div className="key-value" style={{ marginTop: 8 }}>
@@ -200,7 +225,6 @@ export default async function SettingsPage() {
                   type="checkbox"
                   name="confirmGraphApiVersion"
                   value="yes"
-                  disabled={!canManage}
                 />
                 <span className="muted">
                   Confirmo que validei esta versão para o App Meta atual e para Instagram API with Instagram Login.
@@ -210,9 +234,9 @@ export default async function SettingsPage() {
           </div>
 
           <div className="grid two" style={{ marginTop: 18 }}>
-            <UrlField name="oauthAuthorizeUrl" label="OAuth authorize URL" value={provider?.oauth_authorize_url} disabled={!canManage} />
-            <UrlField name="oauthTokenUrl" label="OAuth token URL" value={provider?.oauth_token_url} disabled={!canManage} />
-            <UrlField name="longLivedTokenUrl" label="Long-lived token URL" value={provider?.long_lived_token_url} disabled={!canManage} />
+            <UrlField name="oauthAuthorizeUrl" label="OAuth authorize URL" value={provider?.oauth_authorize_url} />
+            <UrlField name="oauthTokenUrl" label="OAuth token URL" value={provider?.oauth_token_url} />
+            <UrlField name="longLivedTokenUrl" label="Long-lived token URL" value={provider?.long_lived_token_url} />
             <div>
               <label className="field-label" htmlFor="identityProbePath">Identity probe path</label>
               <input
@@ -221,7 +245,6 @@ export default async function SettingsPage() {
                 name="identityProbePath"
                 maxLength={500}
                 defaultValue={provider?.identity_probe_path ?? ""}
-                disabled={!canManage}
                 placeholder="Preencha somente após confirmar no App Meta / documentação oficial atual"
               />
             </div>
@@ -231,11 +254,9 @@ export default async function SettingsPage() {
             Não copie endpoints do Instagram Basic Display legado. A Graph API version só recebe confirmação quando o checkbox acima é marcado explicitamente.
           </div>
 
-          {canManage && (
-            <div className="connection-actions" style={{ marginTop: 20 }}>
-              <button className="button primary" type="submit">Salvar configuração</button>
-            </div>
-          )}
+          <div className="connection-actions" style={{ marginTop: 20 }}>
+            <button className="button primary" type="submit">Salvar configuração</button>
+          </div>
         </form>
       </section>
     </>
@@ -263,13 +284,11 @@ function UrlRow({ label, value }: { label: string; value: string | null }) {
 function UrlField({
   name,
   label,
-  value,
-  disabled
+  value
 }: {
   name: string;
   label: string;
   value: string | null | undefined;
-  disabled: boolean;
 }) {
   return (
     <div>
@@ -281,7 +300,6 @@ function UrlField({
         type="url"
         maxLength={2_000}
         defaultValue={value ?? ""}
-        disabled={disabled}
         placeholder="https://..."
       />
     </div>
