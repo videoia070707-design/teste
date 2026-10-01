@@ -169,7 +169,7 @@ export default async function SettingsPage() {
                 maxLength={500}
                 defaultValue={provider?.identity_probe_path ?? ""}
                 disabled={!canManage}
-                placeholder="/me?fields=id,username"
+                placeholder="Preencha somente após confirmar no App Meta / documentação oficial atual"
               />
             </div>
           </div>
