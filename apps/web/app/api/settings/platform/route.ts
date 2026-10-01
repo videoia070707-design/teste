@@ -11,6 +11,7 @@ interface SetupInput {
   legalEntityName: string | null;
   supportEmail: string | null;
   appId: string | null;
+  metaAppSecret: string | null;
   oauthAuthorizeUrl: string | null;
   oauthTokenUrl: string | null;
   oauthTokenEncoding: "multipart" | "urlencoded";
@@ -39,6 +40,7 @@ export async function POST(request: Request): Promise<Response> {
       legalEntityName: optionalString(form.get("legalEntityName"), 200),
       supportEmail: optionalEmail(form.get("supportEmail")),
       appId: optionalPattern(form.get("appId"), /^[0-9]{4,40}$/),
+      metaAppSecret: optionalSecret(form.get("metaAppSecret")),
       oauthAuthorizeUrl: optionalHttpsUrl(form.get("oauthAuthorizeUrl")),
       oauthTokenUrl: optionalHttpsUrl(form.get("oauthTokenUrl")),
       oauthTokenEncoding: tokenEncoding(form.get("oauthTokenEncoding")),
@@ -65,6 +67,10 @@ export async function POST(request: Request): Promise<Response> {
       ${input.identityProbePath}
     )`;
 
+    if (input.metaAppSecret !== null) {
+      await tx`select app_private.set_meta_app_secret(${input.metaAppSecret})`;
+    }
+
     await tx`
       insert into app_private.audit_logs (
         workspace_id,
@@ -90,7 +96,8 @@ export async function POST(request: Request): Promise<Response> {
             'long_lived_token_url',
             'identity_probe_path'
           ],
-          secretsChanged: false
+          secretFieldsChanged: input.metaAppSecret !== null ? ['meta_app_secret'] : [],
+          secretsChanged: input.metaAppSecret !== null
         })}
       )
     `;
@@ -120,6 +127,13 @@ function optionalPattern(value: FormDataEntryValue | null, pattern: RegExp): str
   const normalized = optionalString(value, 200);
   if (normalized === null) return null;
   if (!pattern.test(normalized)) throw new Error("FIELD_FORMAT_INVALID");
+  return normalized;
+}
+
+function optionalSecret(value: FormDataEntryValue | null): string | null {
+  const normalized = optionalString(value, 512);
+  if (normalized === null) return null;
+  if (normalized.length < 16) throw new Error("META_APP_SECRET_INVALID_LENGTH");
   return normalized;
 }
 
