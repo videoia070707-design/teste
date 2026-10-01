@@ -37,6 +37,18 @@ jobs:
         run: corepack prepare pnpm@9.15.4 --activate
       - name: Install dependencies from committed lockfile
         run: pnpm install --frozen-lockfile
+      - name: Validate HOST PASS local env guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node scripts/hostpass-check.mjs apps/web/.env.local.example; then
+            echo 'Example env unexpectedly passed with its password placeholder.' >&2
+            exit 1
+          fi
+
+          sed 's#<AUTOMATION_WEB_PASSWORD>#ci-only-dummy-password-123456#' \
+            apps/web/.env.local.example > /tmp/hostpass-valid.env
+          node scripts/hostpass-check.mjs /tmp/hostpass-valid.env
       - name: Prepare Supabase database stubs
         run: |
           psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
