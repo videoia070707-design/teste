@@ -26,6 +26,7 @@ export default async function SettingsPage() {
     long_lived_token_url: string | null;
     graph_base_url: string;
     graph_api_version: string;
+    graph_api_version_confirmed_at: string | null;
     identity_probe_path: string | null;
   }[]>`
     select
@@ -36,6 +37,7 @@ export default async function SettingsPage() {
       long_lived_token_url,
       graph_base_url,
       graph_api_version,
+      graph_api_version_confirmed_at,
       identity_probe_path
     from app_private.provider_runtime_config
     where provider_key = ${PROVIDER_KEY}
@@ -173,10 +175,37 @@ export default async function SettingsPage() {
               </select>
             </div>
             <div>
-              <div className="key-value">
-                <span>Graph API</span>
-                <strong className="mono">{provider?.graph_base_url ?? "—"}{provider?.graph_api_version ? ` · ${provider.graph_api_version}` : ""}</strong>
+              <label className="field-label" htmlFor="graphApiVersion">Graph API version</label>
+              <input
+                className="field-control mono"
+                id="graphApiVersion"
+                name="graphApiVersion"
+                pattern="v[0-9]{1,3}\\.[0-9]{1,3}"
+                maxLength={12}
+                defaultValue={provider?.graph_api_version ?? ""}
+                disabled={!canManage}
+                placeholder="v26.0"
+              />
+              <div className="key-value" style={{ marginTop: 8 }}>
+                <span>Confirmation</span>
+                <strong className={provider?.graph_api_version_confirmed_at ? "good" : "warn"}>
+                  {provider?.graph_api_version_confirmed_at ? "CONFIRMED" : "UNCONFIRMED"}
+                </strong>
               </div>
+              {provider?.graph_api_version_confirmed_at && (
+                <p className="muted">Última confirmação: {formatDate(provider.graph_api_version_confirmed_at)}</p>
+              )}
+              <label style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 10 }}>
+                <input
+                  type="checkbox"
+                  name="confirmGraphApiVersion"
+                  value="yes"
+                  disabled={!canManage}
+                />
+                <span className="muted">
+                  Confirmo que validei esta versão para o App Meta atual e para Instagram API with Instagram Login.
+                </span>
+              </label>
             </div>
           </div>
 
@@ -199,7 +228,7 @@ export default async function SettingsPage() {
           </div>
 
           <div className="notice warning" style={{ marginTop: 18 }}>
-            Não copie endpoints do Instagram Basic Display legado. Autorize somente valores confirmados para o produto Instagram API with Instagram Login do App Meta real.
+            Não copie endpoints do Instagram Basic Display legado. A Graph API version só recebe confirmação quando o checkbox acima é marcado explicitamente.
           </div>
 
           {canManage && (
@@ -267,4 +296,9 @@ function safeOrigin(value: string | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString().replace("T", " ").replace(".000Z", "Z");
 }
