@@ -17,7 +17,13 @@ on conflict (config_key) do nothing;
 
 revoke all on app_private.platform_public_config from anon, authenticated;
 
-grant select on app_private.platform_public_config to automation_web;
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'automation_web') then
+    grant select on app_private.platform_public_config to automation_web;
+  end if;
+end
+$$;
 
 comment on table app_private.platform_public_config is
   'Non-secret operator configuration for public legal/App Review surfaces. Null values keep those surfaces fail-closed.';
