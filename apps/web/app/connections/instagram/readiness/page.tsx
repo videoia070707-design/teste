@@ -44,8 +44,8 @@ export default async function InstagramReadinessPage({
           <div className="eyebrow">Connections / Instagram / G3</div>
           <h1>Meta Readiness Center</h1>
           <p>
-            Separa configuração, confirmações externas e evidência real. Nenhuma checkbox manual
-            consegue transformar o G3 em PASS.
+            Separa configuração da plataforma, confirmações externas e evidência real.
+            Nenhuma checkbox manual consegue transformar o G3 em PASS.
           </p>
         </div>
         <span className={`badge ${report.hostPass ? "accent" : "warning"}`}>
@@ -56,10 +56,11 @@ export default async function InstagramReadinessPage({
 
       <div className="connection-actions">
         <Link className="button" href="/connections">Voltar para Connections</Link>
+        <Link className="button" href="/settings">Abrir Setup Center</Link>
         <a className="button primary" href="/api/connections/instagram/start">Conectar / reautorizar Instagram</a>
         {canManage && (
           <form action="/api/connections/instagram/readiness/self-test" method="post">
-            <button className="button" type="submit">Executar preflight local</button>
+            <button className="button" type="submit">Executar preflight G3</button>
           </form>
         )}
       </div>
@@ -67,8 +68,8 @@ export default async function InstagramReadinessPage({
       {preflight && (
         <div className={`notice ${preflight === "blocked" ? "warning" : ""}`} style={{ marginTop: 16 }}>
           {preflight === "ready"
-            ? "Preflight local passou: configuração estrutural + challenge criptográfico estão prontos. Isso NÃO conta como HOST PASS."
-            : "Preflight local bloqueado: uma ou mais configurações estruturais ainda precisam ser corrigidas. Nenhuma evidência real foi alterada."}
+            ? "Preflight G3 passou: configuração estrutural, challenge público do webhook Edge e guard de Data Deletion estão prontos. Isso NÃO conta como HOST PASS."
+            : "Preflight G3 bloqueado: uma ou mais configurações estruturais/Edge ainda precisam ser corrigidas. Nenhuma evidência real foi alterada."}
         </div>
       )}
 
@@ -80,9 +81,9 @@ export default async function InstagramReadinessPage({
 
       <section className="section grid two">
         <article className="card">
-          <div className="eyebrow">Runtime configuration</div>
+          <div className="eyebrow">G3 Free configuration</div>
           <h2>{report.configurationReady ? "Configuração pronta" : "Configuração ainda bloqueada"}</h2>
-          <p>Somente presença/validade estrutural é mostrada. Nenhum secret é renderizado.</p>
+          <p>Estado derivado do banco, Supabase Vault e heartbeat do Edge Runtime. O host do dashboard não decide este gate.</p>
           {report.configuration.map((item) => (
             <div className="key-value" key={item.key} title={item.detail}>
               <span>{item.label}</span>
@@ -94,8 +95,8 @@ export default async function InstagramReadinessPage({
         <article className="card">
           <div className="eyebrow">Provider URLs</div>
           <h2>Valores para o App Dashboard da Meta</h2>
-          <p>Derivados da origem pública do web e da origem fixa do projeto Supabase para evitar callbacks divergentes.</p>
-          <UrlRow label="App origin" value={report.urls.appOrigin} />
+          <p>Callbacks críticos ficam no Supabase Edge e continuam disponíveis independentemente do dashboard web estar local, hospedado ou offline.</p>
+          <UrlRow label="Dashboard origin (informativo)" value={report.urls.appOrigin} />
           <UrlRow label="OAuth redirect URI" value={report.urls.oauthRedirect} />
           <UrlRow label="Webhook callback" value={report.urls.webhookCallback} />
           <UrlRow label="Data deletion callback" value={report.urls.dataDeletionCallback} />
@@ -144,7 +145,7 @@ export default async function InstagramReadinessPage({
           <article className="card">
             <div className="eyebrow">Passo 1</div>
             <h2>Envie esta frase pela conta tester</h2>
-            <p>Depois que o webhook real for processado, a plataforma reconhecerá o challenge automaticamente.</p>
+            <p>Depois que o webhook real for processado pelo Supabase Edge, a plataforma reconhecerá o challenge automaticamente.</p>
             <div className="notice mono">{hostPassChallenge}</div>
             <div className="key-value">
               <span>Challenge inbound</span>
@@ -172,7 +173,7 @@ export default async function InstagramReadinessPage({
               </button>
             )}
             <p className="muted" style={{ marginTop: 12 }}>
-              O clique não marca PASS. O outbound worker ainda precisa receber um provider_message_id real da Meta.
+              O clique não marca PASS. O Supabase Edge Runtime ainda precisa receber um provider_message_id real da Meta.
             </p>
           </article>
         </div>
@@ -254,7 +255,7 @@ function attestationClass(status: string | null): string {
 
 function normalizeHostPassStatus(value: string | undefined): { message: string; tone: "" | "warning" } | null {
   switch (value) {
-    case "reply_queued": return { message: "Resposta HOST PASS enfileirada. Aguarde o outbound worker e a evidência real da Meta; nenhum PASS foi forçado.", tone: "" };
+    case "reply_queued": return { message: "Resposta HOST PASS enfileirada. Aguarde o Supabase Edge Runtime e a evidência real da Meta; nenhum PASS foi forçado.", tone: "" };
     case "reply_already_queued": return { message: "Este challenge já possui uma resposta HOST PASS enfileirada. A idempotência bloqueou duplicação.", tone: "" };
     case "challenge_not_seen": return { message: "O challenge ainda não apareceu como message.received real. Envie a frase exata pela conta tester e aguarde o webhook.", tone: "warning" };
     case "auth_invalid": return { message: "A conexão perdeu autorização. Reautorize o Instagram antes de responder ao challenge.", tone: "warning" };
