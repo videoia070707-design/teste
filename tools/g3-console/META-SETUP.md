@@ -6,10 +6,28 @@ Use este guia junto do `G3 Console`. O console grava secrets no Supabase Vault e
 
 - **Meta App ID** — ID numérico exibido no App Dashboard da Meta.
 - **Meta App Secret** — secret do app; cole somente no campo write-only do G3 Console.
-- **OAuth authorize URL** — use apenas o endpoint confirmado para **Instagram API with Instagram Login** no App/ documentação atual.
+- **OAuth authorize URL** — use apenas o endpoint confirmado para **Instagram API with Instagram Login** no App/documentação atual.
 - **OAuth token URL** — endpoint confirmado para troca do authorization code no mesmo produto.
 - **Long-lived token URL** — endpoint confirmado para promoção/refresh compatível com o fluxo atual.
 - **Identity probe path** — path de identidade/perfil confirmado para a versão atual da API. Não reutilize automaticamente exemplos do Instagram Basic Display legado.
+
+## Webhook Verify Token
+
+Você não precisa abrir o Supabase para procurar ou copiar esse secret.
+
+No G3 Console:
+
+1. entre com uma conta `owner` ou `admin`;
+2. vá até **Webhook verification**;
+3. clique em **Gerar/rotacionar Verify Token**;
+4. confirme a rotação;
+5. clique em **Copiar token**;
+6. cole esse valor no campo de verificação do webhook no App Meta;
+7. use como callback `https://cqtrigqlktekczbbsxiy.supabase.co/functions/v1/instagram-webhook`.
+
+A rotação substitui o valor anterior no Supabase Vault. Se o webhook já estiver configurado na Meta, atualizar o token no console exige atualizar o mesmo valor no App Dashboard antes de uma nova verificação.
+
+O token aparece no console somente na resposta da rotação; ele não é carregado de volta do Vault em visitas posteriores.
 
 ## URLs públicas já prontas no Supabase Free
 
