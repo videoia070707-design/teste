@@ -4,6 +4,7 @@ import { getDatabase } from "@/lib/server/database";
 import { getPlatformSecret } from "@/lib/server/platform-secrets";
 
 const PROVIDER_KEY = "instagram.meta.official";
+const EDGE_OAUTH_CALLBACK_PATH = "/functions/v1/instagram-oauth-callback";
 
 export interface InstagramApiConfig {
   graphBaseUrl: string;
@@ -34,7 +35,6 @@ export async function getInstagramApiConfig(): Promise<InstagramApiConfig> {
 
 export async function getInstagramServerConfig(): Promise<InstagramServerConfig> {
   const hosted = await readHostedConfig();
-  const origin = requiredUrlFromEnvironment("APP_ORIGIN").origin;
   const authorizationEndpoint = requiredConfiguredUrl(
     "Instagram OAuth authorize URL",
     hosted?.oauth_authorize_url,
@@ -68,11 +68,25 @@ export async function getInstagramServerConfig(): Promise<InstagramServerConfig>
       tokenEndpoint,
       clientId,
       clientSecret,
-      redirectUri: `${origin}/api/connections/instagram/callback`,
+      redirectUri: resolveOAuthRedirectUri(),
       tokenRequestEncoding
     },
     longLivedTokenEndpoint
   };
+}
+
+export function resolveOAuthRedirectUri(): string {
+  const explicit = process.env.INSTAGRAM_OAUTH_REDIRECT_URL?.trim();
+  if (explicit) return requiredHttpsOrLocalUrl(explicit, "INSTAGRAM_OAUTH_REDIRECT_URL").toString();
+
+  const supabase = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  if (supabase) {
+    const origin = requiredHttpsOrLocalUrl(supabase, "NEXT_PUBLIC_SUPABASE_URL").origin;
+    return `${origin}${EDGE_OAUTH_CALLBACK_PATH}`;
+  }
+
+  const origin = requiredUrlFromEnvironment("APP_ORIGIN").origin;
+  return `${origin}/api/connections/instagram/callback`;
 }
 
 async function readHostedConfig(): Promise<HostedInstagramConfigRow | null> {
@@ -166,6 +180,15 @@ function requiredUrlFromEnvironment(name: string): URL {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is not configured.`);
   return new URL(value);
+}
+
+function requiredHttpsOrLocalUrl(value: string, label: string): URL {
+  const url = new URL(value);
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1";
+  if (url.protocol !== "https:" && !(local && url.protocol === "http:")) {
+    throw new Error(`${label} must use HTTPS outside local development.`);
+  }
+  return url;
 }
 
 function parseEncoding(value: string | undefined | null): "multipart" | "urlencoded" {
