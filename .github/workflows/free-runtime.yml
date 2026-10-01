@@ -44,6 +44,7 @@ jobs:
             030_setup_center_patch_semantics.sql
             031_graph_api_version_confirmation.sql
             032_instagram_outbound_requires_confirmed_graph_version.sql
+            033_platform_operator_boundary.sql
           )
           mapfile -t actual < <(find database -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
           test "${#actual[@]}" -eq "${#expected[@]}"
@@ -81,6 +82,8 @@ jobs:
             030_setup_center_patch_semantics.sql
             031_graph_api_version_confirmation.sql
             032_instagram_outbound_requires_confirmed_graph_version.sql
+            033_platform_operator_boundary.sql
+            034_platform_operator_meta_secret_guard.sql
           )
           mapfile -t actual < <(find supabase/migrations -maxdepth 1 -type f -name '[0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort)
           test "${#actual[@]}" -eq "${#expected[@]}"
@@ -88,7 +91,7 @@ jobs:
             test "${actual[$i]}" = "${expected[$i]}"
           done
 
-          for shared in 021_meta_compliance.sql 025_platform_public_config.sql 026_oauth_consumption_membership_guard.sql 027_setup_center_config_bridge.sql 028_provider_runtime_config_portability.sql 030_setup_center_patch_semantics.sql 031_graph_api_version_confirmation.sql 032_instagram_outbound_requires_confirmed_graph_version.sql; do
+          for shared in 021_meta_compliance.sql 025_platform_public_config.sql 026_oauth_consumption_membership_guard.sql 027_setup_center_config_bridge.sql 028_provider_runtime_config_portability.sql 030_setup_center_patch_semantics.sql 031_graph_api_version_confirmation.sql 032_instagram_outbound_requires_confirmed_graph_version.sql 033_platform_operator_boundary.sql; do
             cmp --silent "database/$shared" "supabase/migrations/$shared" || {
               echo "Portable migration $shared drifted between database/ and supabase/migrations/." >&2
               exit 1
