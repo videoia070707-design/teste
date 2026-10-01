@@ -67,7 +67,7 @@ export default async function SettingsPage() {
         <div className="header-copy">
           <div className="eyebrow">Settings / {membership.workspaceName}</div>
           <h1>Setup Center</h1>
-          <p>Configuração operacional do HOST PASS. Segredos continuam no Supabase Vault e nunca são exibidos nesta tela.</p>
+          <p>Configuração operacional do HOST PASS. Segredos ficam no Supabase Vault e nunca são exibidos novamente pela interface.</p>
         </div>
         <span className={`badge ${canManage ? "accent" : "muted"}`}>{canManage ? "Owner/Admin" : "Read only"}</span>
       </header>
@@ -79,7 +79,7 @@ export default async function SettingsPage() {
           <StatusRow label="Meta App Secret" ready={secretState?.meta_app_secret_ready ?? false} />
           <StatusRow label="Webhook verify token" ready={secretState?.verify_token_ready ?? false} />
           <StatusRow label="Provider AES keyring" ready={secretState?.keyring_ready ?? false} />
-          <div className="notice">Esta tela nunca recebe nem revela o App Secret. O valor é provisionado diretamente no Supabase Vault.</div>
+          <div className="notice">O App Secret pode ser gravado por campo write-only abaixo. O valor nunca é pré-preenchido, retornado ou mostrado depois do salvamento.</div>
         </article>
 
         <article className="card">
@@ -95,7 +95,7 @@ export default async function SettingsPage() {
       <section className="section">
         <div className="section-head">
           <div><div className="eyebrow">Operator configuration</div><h2>Meta + identidade pública</h2></div>
-          <p>somente dados não secretos</p>
+          <p>configuração operacional + secret write-only</p>
         </div>
 
         <form className="card" action="/api/settings/platform" method="post">
@@ -142,6 +142,24 @@ export default async function SettingsPage() {
               />
             </div>
             <div>
+              <label className="field-label" htmlFor="metaAppSecret">Meta App Secret</label>
+              <input
+                className="field-control mono"
+                id="metaAppSecret"
+                name="metaAppSecret"
+                type="password"
+                minLength={16}
+                maxLength={512}
+                autoComplete="new-password"
+                disabled={!canManage}
+                placeholder={secretState?.meta_app_secret_ready ? "Já configurado — deixe vazio para manter" : "Cole o App Secret uma única vez"}
+              />
+              <p className="muted">Write-only: deixar vazio mantém o secret atual. O valor nunca é renderizado de volta.</p>
+            </div>
+          </div>
+
+          <div className="grid two" style={{ marginTop: 18 }}>
+            <div>
               <label className="field-label" htmlFor="oauthTokenEncoding">OAuth token encoding</label>
               <select
                 className="field-control"
@@ -153,6 +171,12 @@ export default async function SettingsPage() {
                 <option value="multipart">multipart</option>
                 <option value="urlencoded">urlencoded</option>
               </select>
+            </div>
+            <div>
+              <div className="key-value">
+                <span>Graph API</span>
+                <strong className="mono">{provider?.graph_base_url ?? "—"}{provider?.graph_api_version ? ` · ${provider.graph_api_version}` : ""}</strong>
+              </div>
             </div>
           </div>
 
@@ -178,14 +202,9 @@ export default async function SettingsPage() {
             Não copie endpoints do Instagram Basic Display legado. Autorize somente valores confirmados para o produto Instagram API with Instagram Login do App Meta real.
           </div>
 
-          <div className="key-value" style={{ marginTop: 18 }}>
-            <span>Graph API</span>
-            <strong className="mono">{provider?.graph_base_url ?? "—"}{provider?.graph_api_version ? ` · ${provider.graph_api_version}` : ""}</strong>
-          </div>
-
           {canManage && (
             <div className="connection-actions" style={{ marginTop: 20 }}>
-              <button className="button primary" type="submit">Salvar configuração não secreta</button>
+              <button className="button primary" type="submit">Salvar configuração</button>
             </div>
           )}
         </form>
