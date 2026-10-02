@@ -1,0 +1,84 @@
+name: RC18 Exact Qualification
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot-integrity:
+    name: RC18 snapshot integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild exact RC18 archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat qualification/rc18/rc18.part-*.b64 | tr -d '\r\n' | base64 -d > "$RUNNER_TEMP/rc18.zip"
+          echo "61cae1c42ca8177a0f1624637e2ac95ec1088fc50c44ee255964cab82f9d9cdd  $RUNNER_TEMP/rc18.zip" | sha256sum -c -
+          unzip -t "$RUNNER_TEMP/rc18.zip"
+          mkdir -p "$RUNNER_TEMP/rc18"
+          unzip -q "$RUNNER_TEMP/rc18.zip" -d "$RUNNER_TEMP/rc18"
+          test -f "$RUNNER_TEMP/rc18/Automation-Platform-RC18-Closure-Stage-Tracker-2026-10-02/package.json"
+
+  windows-powershell:
+    name: Windows PowerShell parser - exact RC18
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild exact RC18 archive
+        shell: powershell
+        run: |
+          $parts = Get-ChildItem -Path "qualification/rc18" -Filter "rc18.part-*.b64" | Sort-Object Name
+          if (-not $parts) { throw "RC18 base64 parts not found" }
+          $encoded = (($parts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join '') -replace '\s',''
+          $zipPath = Join-Path $env:RUNNER_TEMP 'rc18.zip'
+          [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($encoded))
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '61cae1c42ca8177a0f1624637e2ac95ec1088fc50c44ee255964cab82f9d9cdd') { throw "RC18 SHA256 mismatch: $hash" }
+          $extract = Join-Path $env:RUNNER_TEMP 'rc18'
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $extract -Force
+          $root = Join-Path $extract 'Automation-Platform-RC18-Closure-Stage-Tracker-2026-10-02'
+          & (Join-Path $root 'scripts/windows/Test-PowerShellSyntax.ps1') -DirectoryPath (Join-Path $root 'scripts/windows')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  linux-toolchain:
+    name: Linux toolchain + typecheck + tests + build - exact RC18
+    runs-on: ubuntu-latest
+    needs: snapshot-integrity
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Rebuild exact RC18 archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat qualification/rc18/rc18.part-*.b64 | tr -d '\r\n' | base64 -d > "$RUNNER_TEMP/rc18.zip"
+          echo "61cae1c42ca8177a0f1624637e2ac95ec1088fc50c44ee255964cab82f9d9cdd  $RUNNER_TEMP/rc18.zip" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/rc18"
+          unzip -q "$RUNNER_TEMP/rc18.zip" -d "$RUNNER_TEMP/rc18"
+      - name: Enable exact pnpm
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@9.15.4 --activate
+          pnpm --version
+      - name: Install from lockfile
+        working-directory: ${{ runner.temp }}/rc18/Automation-Platform-RC18-Closure-Stage-Tracker-2026-10-02
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        working-directory: ${{ runner.temp }}/rc18/Automation-Platform-RC18-Closure-Stage-Tracker-2026-10-02
+        run: pnpm typecheck
+      - name: Tests
+        working-directory: ${{ runner.temp }}/rc18/Automation-Platform-RC18-Closure-Stage-Tracker-2026-10-02
+        run: pnpm test
+      - name: Build
+        working-directory: ${{ runner.temp }}/rc18/Automation-Platform-RC18-Closure-Stage-Tracker-2026-10-02
+        run: pnpm build
