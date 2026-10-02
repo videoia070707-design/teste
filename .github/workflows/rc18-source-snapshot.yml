@@ -1,0 +1,22 @@
+name: RC18 Source Snapshot
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+  workflow_dispatch:
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack source snapshot
+        run: |
+          tar --exclude=.git -czf rc18-remote-source.tar.gz .
+      - name: Upload snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc18-remote-source
+          path: rc18-remote-source.tar.gz
+          retention-days: 1
