@@ -1,0 +1,142 @@
+Item -LiteralPath $AutomationWorkerIdFile -Force -ErrorAction SilentlyContinue
+}
+
+function Wait-AppHealth {
+  param(
+    [Parameter(Mandatory = $true)][string]$Url,
+    [Parameter(Mandatory = $true)][string]$ExpectedStatus,
+    [Parameter(Mandatory = $false)][string]$ExpectedService = "",
+    [Parameter(Mandatory = $false)][int]$TimeoutSeconds = 90
+  )
+
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    try {
+      $response = Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 5
+      if ($response.StatusCode -eq 200) {
+        $payload = $response.Content | ConvertFrom-Json
+        $statusOk = [string]$payload.status -eq $ExpectedStatus
+        $serviceOk = [string]::IsNullOrWhiteSpace($ExpectedService) -or [string]$payload.service -eq $ExpectedService
+        if ($statusOk -and $serviceOk) { return $true }
+      }
+    } catch { }
+    Start-Sleep -Seconds 2
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
+function Wait-AutomationWorkerReady {
+  param(
+    [Parameter(Mandatory = $true)][string]$WorkerId,
+    [Parameter(Mandatory = $true)][int]$ProcessId,
+    [Parameter(Mandatory = $false)][int]$TimeoutSeconds = 45
+  )
+
+  $safeWorkerId = $WorkerId.Replace("'", "''")
+  $query = "select case when runtime_state='active' and stopped_at is null and last_seen_at >= now() - interval '20 seconds' then 'ready' else 'not_ready' end from app_private.worker_heartbeats where worker_kind='worker-automation' and worker_id='$safeWorkerId' order by last_seen_at desc limit 1;"
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    if (-not (Test-ProcessRunning -ProcessId $ProcessId)) { return $false }
+    try {
+      $result = (& docker.exe exec $DbContainer psql -U $DbUser -d $DbName -Atqc $query 2>$null | Select-Object -Last 1)
+      if (([string]$result).Trim() -eq "ready") { return $true }
+    } catch { }
+    Start-Sleep -Seconds 1
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
+function Stop-PidFromFile([string]$PidFile, [string]$Label) {
+  if (-not (Test-Path -LiteralPath $PidFile)) { return }
+  $oldPid = (Get-Content -LiteralPath $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if ($oldPid -match '^\d+$') {
+    & taskkill.exe /PID $oldPid /T /F *> $null
+    if ($LASTEXITCODE -ne 0) { Stop-Process -Id ([int]$oldPid) -Force -ErrorAction SilentlyContinue }
+    Log "$Label anterior encerrado com arvore de processos (PID $oldPid)."
+  }
+  Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+}
+
+function Drain-PreviousAutomationWorker {
+  param([Parameter(Mandatory = $false)][int]$TimeoutSeconds = 120)
+  if (-not (Test-Path -LiteralPath $AutomationPidFile)) { return }
+  $oldPidValue = (Get-Content -LiteralPath $AutomationPidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+  if ($oldPidValue -notmatch '^\d+$') {
+    Remove-Item -LiteralPath $AutomationPidFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $AutomationWorkerIdFile -Force -ErrorAction SilentlyContinue
+    return
+  }
+  $oldPid = [int]$oldPidValue
+  if (-not (Test-ProcessRunning -ProcessId $oldPid)) {
+    Remove-Item -LiteralPath $AutomationPidFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $AutomationWorkerIdFile -Force -ErrorAction SilentlyContinue
+    return
+  }
+
+  $oldWorkerId = ""
+  if (Test-Path -LiteralPath $AutomationWorkerIdFile) {
+    $oldWorkerId = ((Get-Content -LiteralPath $AutomationWorkerIdFile -ErrorAction SilentlyContinue | Select-Object -First 1) + "").Trim()
+  }
+  if (-not [string]::IsNullOrWhiteSpace($oldWorkerId)) {
+    $safeWorkerId = $oldWorkerId.Replace("'", "''")
+    $request = "update app_private.worker_heartbeats set drain_requested_at=coalesce(drain_requested_at,now()),drain_requested_by='windows-local-restart',runtime_state=case when runtime_state='stopped' then runtime_state else 'draining' end where worker_kind='worker-automation' and worker_id='$safeWorkerId' and stopped_at is null;"
+    & docker.exe exec $DbContainer psql -U $DbUser -d $DbName -v ON_ERROR_STOP=1 -c $request *> $null
+    if ($LASTEXITCODE -eq 0) {
+      Log "Restart seguro: drain solicitado ao worker anterior $oldWorkerId."
+      $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+      do {
+        if (-not (Test-ProcessRunning -ProcessId $oldPid)) { break }
+        $stateQuery = "select case when stopped_at is not null or runtime_state='stopped' then 'stopped' else coalesce(runtime_state,'unknown') end from app_private.worker_heartbeats where worker_kind='worker-automation' and worker_id='$safeWorkerId' limit 1;"
+        $state = (& docker.exe exec $DbContainer psql -U $DbUser -d $DbName -Atqc $stateQuery 2>$null | Select-Object -Last 1)
+        if (([string]$state).Trim() -eq 'stopped') { break }
+        Start-Sleep -Seconds 2
+      } while ((Get-Date) -lt $deadline)
+    }
+  }
+
+  if (Test-ProcessRunning -ProcessId $oldPid) {
+    if (-not [string]::IsNullOrWhiteSpace($oldWorkerId)) {
+      $safeWorkerId = $oldWorkerId.Replace("'", "''")
+      $forced = "update app_private.worker_heartbeats set shutdown_forced_at=now(),shutdown_forced_reason='restart-drain-timeout',runtime_state='stopped',stopped_at=now(),current_work_type=null,current_work_id=null where worker_kind='worker-automation' and worker_id='$safeWorkerId';"
+      & docker.exe exec $DbContainer psql -U $DbUser -d $DbName -c $forced *> $null
+    }
+    Stop-ProcessTree -ProcessId $oldPid -Label "Automation worker anterior (fallback apos drain)"
+  } else {
+    Log "Automation worker anterior encerrou apos graceful drain."
+  }
+  Remove-Item -LiteralPath $AutomationPidFile -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $AutomationWorkerIdFile -Force -ErrorAction SilentlyContinue
+}
+
+function Ensure-Pnpm {
+  $pnpmOk = $false
+  if (Command-Exists "pnpm.cmd") {
+    try {
+      $pnpmVersion = (& pnpm.cmd --version 2>$null).Trim()
+      if ($pnpmVersion -eq "9.15.4") {
+        $pnpmOk = $true
+        Log "pnpm 9.15.4 ja esta ativo."
+      }
+    } catch { }
+  }
+
+  if ($pnpmOk) { return }
+  if (-not (Command-Exists "corepack.cmd")) { throw "COREPACK_NOT_AVAILABLE" }
+  Invoke-External -FilePath "corepack.cmd" -Arguments @("prepare", "pnpm@9.15.4", "--activate") -Label "preparar pnpm 9.15.4 via Corepack"
+  New-Item -ItemType Directory -Path $LocalBinDir -Force | Out-Null
+  @"
+@echo off
+corepack.cmd pnpm %*
+"@ | Set-Content -LiteralPath $PnpmShim -Encoding ASCII
+  $env:PATH = "$LocalBinDir;$env:PATH"
+  $pnpmVersion = (& $PnpmShim --version 2>$null | Select-Object -First 1).Trim()
+  if ($pnpmVersion -ne "9.15.4") { throw "PNPM_VERSION_MISMATCH:$pnpmVersion" }
+  Log "pnpm 9.15.4 disponivel via shim local sem alterar a instalacao global do Node."
+}
+
+function Ensure-Dependencies {
+  $lockFile = Join-Path $SourceRoot "pnpm-lock.yaml"
+  $nodeModulesMarker = Join-Path $SourceRoot "node_modules\.modules.yaml"
+  $lockHash = (Get-FileHash -LiteralPath $lockFile -Algorithm SHA256).Hash.ToLowerInvariant()
+  $recordedHash = ""
+  if (Test-Path -LiteralPath $DependencyHashFile) {
