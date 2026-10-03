@@ -35,12 +35,10 @@ jobs:
           shopt -s nullglob
           parts=(.ci/rc18-core.patch.b64.*)
           test "${#parts[@]}" -eq 12
-          encoded="$(cat "${parts[@]}" | tr -d '\r\n\t ')"
-          rem=$((${#encoded}%4))
-          [ "$rem" -ne 2 ] || encoded="${encoded}=="
-          [ "$rem" -ne 3 ] || encoded="${encoded}="
-          [ "$rem" -ne 1 ]
-          printf '%s' "$encoded" | base64 --decode > "$RUNNER_TEMP/rc18.gz"
+          : > "$RUNNER_TEMP/rc18.gz"
+          for part in "${parts[@]}"; do
+            tr -d '\r\n\t ' < "$part" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
+          done
           gzip -t "$RUNNER_TEMP/rc18.gz"
           gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
           git apply --binary --check "$RUNNER_TEMP/rc18.patch"
@@ -75,12 +73,11 @@ jobs:
           shopt -s nullglob
           parts=(.ci/rc18-core.patch.b64.*)
           test "${#parts[@]}" -eq 12
-          encoded="$(cat "${parts[@]}" | tr -d '\r\n\t ')"
-          rem=$((${#encoded}%4))
-          [ "$rem" -ne 2 ] || encoded="${encoded}=="
-          [ "$rem" -ne 3 ] || encoded="${encoded}="
-          [ "$rem" -ne 1 ]
-          printf '%s' "$encoded" | base64 --decode > "$RUNNER_TEMP/rc18.gz"
+          : > "$RUNNER_TEMP/rc18.gz"
+          for part in "${parts[@]}"; do
+            tr -d '\r\n\t ' < "$part" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
+          done
+          gzip -t "$RUNNER_TEMP/rc18.gz"
           gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
           git apply --binary --check "$RUNNER_TEMP/rc18.patch"
           git apply --binary "$RUNNER_TEMP/rc18.patch"
@@ -122,12 +119,11 @@ jobs:
           shopt -s nullglob
           parts=(.ci/rc18-core.patch.b64.*)
           test "${#parts[@]}" -eq 12
-          encoded="$(cat "${parts[@]}" | tr -d '\r\n\t ')"
-          rem=$((${#encoded}%4))
-          [ "$rem" -ne 2 ] || encoded="${encoded}=="
-          [ "$rem" -ne 3 ] || encoded="${encoded}="
-          [ "$rem" -ne 1 ]
-          printf '%s' "$encoded" | base64 --decode > "$RUNNER_TEMP/rc18.gz"
+          : > "$RUNNER_TEMP/rc18.gz"
+          for part in "${parts[@]}"; do
+            tr -d '\r\n\t ' < "$part" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
+          done
+          gzip -t "$RUNNER_TEMP/rc18.gz"
           gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
           git apply --binary --check "$RUNNER_TEMP/rc18.patch"
           git apply --binary "$RUNNER_TEMP/rc18.patch"
