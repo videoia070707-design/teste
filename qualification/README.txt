@@ -1,0 +1,1 @@
+Automation Platform RC18 qualification branch. Source synchronization and CI-only validation; main branch is untouched.
