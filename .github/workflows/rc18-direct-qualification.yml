@@ -30,7 +30,12 @@ jobs:
           test "${#parts[@]}" -eq 12
           : > "$RUNNER_TEMP/rc18.gz"
           for part in "${parts[@]}"; do
-            tr -d '\r\n\t ' < "$part" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
+            encoded="$(tr -d '\r\n\t ' < "$part")"
+            rem=$((${#encoded}%4))
+            [ "$rem" -ne 2 ] || encoded="${encoded}=="
+            [ "$rem" -ne 3 ] || encoded="${encoded}="
+            [ "$rem" -ne 1 ]
+            printf '%s' "$encoded" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
           done
           gzip -t "$RUNNER_TEMP/rc18.gz"
           gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
@@ -71,7 +76,12 @@ jobs:
           test "${#parts[@]}" -eq 12
           : > "$RUNNER_TEMP/rc18.gz"
           for part in "${parts[@]}"; do
-            tr -d '\r\n\t ' < "$part" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
+            encoded="$(tr -d '\r\n\t ' < "$part")"
+            rem=$((${#encoded}%4))
+            [ "$rem" -ne 2 ] || encoded="${encoded}=="
+            [ "$rem" -ne 3 ] || encoded="${encoded}="
+            [ "$rem" -ne 1 ]
+            printf '%s' "$encoded" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
           done
           gzip -t "$RUNNER_TEMP/rc18.gz"
           gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
@@ -117,7 +127,12 @@ jobs:
           test "${#parts[@]}" -eq 12
           : > "$RUNNER_TEMP/rc18.gz"
           for part in "${parts[@]}"; do
-            tr -d '\r\n\t ' < "$part" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
+            encoded="$(tr -d '\r\n\t ' < "$part")"
+            rem=$((${#encoded}%4))
+            [ "$rem" -ne 2 ] || encoded="${encoded}=="
+            [ "$rem" -ne 3 ] || encoded="${encoded}="
+            [ "$rem" -ne 1 ]
+            printf '%s' "$encoded" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
           done
           gzip -t "$RUNNER_TEMP/rc18.gz"
           gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
@@ -203,4 +218,4 @@ jobs:
           test ! -f "$RUNNER_TEMP/worker.pid" || kill "$(cat "$RUNNER_TEMP/worker.pid")" 2>/dev/null || true
           docker rm -f rc18-qualification-db >/dev/null 2>&1 || true
 
-# qualification-trigger: 2026-10-03T15:16:00-04:00
+# qualification-trigger: 2026-10-03T15:24:00-04:00
