@@ -29,7 +29,9 @@ jobs:
           $Bundle = Join-Path $PWD 'rc18-powershell.tgz'
           $Extract = Join-Path $PWD 'rc18-powershell'
           $Base64 = Get-Content -LiteralPath '.ci/rc18-powershell.tgz.b64' -Raw
-          [IO.File]::WriteAllBytes($Bundle, [Convert]::FromBase64String($Base64.Trim()))
+          $Normalized = ($Base64 -replace '[^A-Za-z0-9+/=]', '')
+          if ([string]::IsNullOrWhiteSpace($Normalized)) { throw 'RC18 PowerShell bundle Base64 is empty after normalization' }
+          [IO.File]::WriteAllBytes($Bundle, [Convert]::FromBase64String($Normalized))
           $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Bundle).Hash.ToLowerInvariant()
           if ($ActualHash -ne $ExpectedHash) { throw "RC18 PowerShell bundle hash mismatch: $ActualHash" }
           New-Item -ItemType Directory -Path $Extract -Force | Out-Null
@@ -48,6 +50,14 @@ jobs:
           'verdict=PASS' | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
           "host=$([Environment]::OSVersion.VersionString)" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
           "powershell=$($PSVersionTable.PSVersion.ToString())" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+
+      - name: Capture failure evidence
+        if: failure()
+        shell: powershell
+        run: |
+          if (-not (Test-Path -LiteralPath 'powershell-qualification.txt')) {
+            'verdict=FAIL' | Set-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          }
 
       - name: Upload qualification evidence
         if: always()
