@@ -18,7 +18,7 @@ jobs:
       - name: Checkout qualification branch
         uses: actions/checkout@v4
 
-      - name: Decode and parse exact RC18 PowerShell payloads
+      - name: Reconstruct ZIP and parse exact RC18 PowerShell scripts
         id: parser
         shell: pwsh
         run: |
@@ -26,32 +26,35 @@ jobs:
           $resultDir = 'qualification/results'
           New-Item -ItemType Directory -Force -Path $resultDir | Out-Null
           $decodedDir = Join-Path $env:RUNNER_TEMP 'rc18-powershell'
+          $zipPath = Join-Path $env:RUNNER_TEMP 'rc18-windows.zip'
           New-Item -ItemType Directory -Force -Path $decodedDir | Out-Null
 
-          $encodedFiles = @(Get-ChildItem 'qualification/windows' -Filter '*.b64' -File | Sort-Object Name)
+          $parts = @(Get-ChildItem 'qualification/windows' -Filter 'rc18-windows.part-*.b64' -File | Sort-Object Name)
           $errors = @()
           $parsed = 0
+          $archiveParts = $parts.Count
 
           try {
-            if ($encodedFiles.Count -ne 15) {
-              throw "Expected 15 RC18 PowerShell payloads, found $($encodedFiles.Count)."
+            if ($parts.Count -lt 1) {
+              throw 'RC18 Windows archive chunks were not found.'
             }
 
-            foreach ($encoded in $encodedFiles) {
-              $targetName = $encoded.BaseName
-              if (-not $targetName.EndsWith('.ps1')) {
-                throw "Encoded payload does not map to .ps1: $($encoded.Name)"
-              }
-              $target = Join-Path $decodedDir $targetName
-              $raw = (Get-Content -LiteralPath $encoded.FullName -Raw).Trim()
-              [IO.File]::WriteAllBytes($target, [Convert]::FromBase64String($raw))
+            $base64 = [string]::Concat(@($parts | ForEach-Object { (Get-Content -LiteralPath $_.FullName -Raw).Trim() }))
+            [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($base64))
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $decodedDir -Force
 
+            $scripts = @(Get-ChildItem $decodedDir -Filter '*.ps1' -File -Recurse | Sort-Object FullName)
+            if ($scripts.Count -ne 15) {
+              throw "Expected 15 RC18 PowerShell scripts in reconstructed archive, found $($scripts.Count)."
+            }
+
+            foreach ($script in $scripts) {
               $tokens = $null
               $parseErrors = $null
-              [System.Management.Automation.Language.Parser]::ParseFile($target, [ref]$tokens, [ref]$parseErrors) | Out-Null
+              [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
               if ($parseErrors.Count -gt 0) {
                 foreach ($parseError in $parseErrors) {
-                  $errors += "${targetName}: $($parseError.Message)"
+                  $errors += "$($script.Name): $($parseError.Message)"
                 }
               }
               $parsed += 1
@@ -62,9 +65,10 @@ jobs:
 
           $status = if ($errors.Count -eq 0 -and $parsed -eq 15) { 'PASS' } else { 'FAIL' }
           $evidence = [ordered]@{
-            schemaVersion = 1
+            schemaVersion = 2
             stage = 'windows-powershell'
             status = $status
+            archiveParts = $archiveParts
             parsedFiles = $parsed
             expectedFiles = 15
             sourceCommit = '${{ github.sha }}'
