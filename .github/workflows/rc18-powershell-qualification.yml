@@ -24,7 +24,8 @@ jobs:
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $ExpectedArchiveHash = '70d38d557f6e0bdc6520436f665e97bb48f581616c8e0ee332c7450192171e55'
+          $ExpectedArchiveHash = 'a6a35b08224388ba35ef17748d8fd2f58f796b7d9602885275db651e14f35e3b'
+          $ExpectedLedgerHash = '1875f5ab5683c5eddd79d028794515331e693de299db1258d4346e7fbdd3a5d2'
           $Parts = @(Get-ChildItem -LiteralPath '.\.ci\rc18-powershell-exact' -Filter '*.b64' -File | Sort-Object Name)
           if ($Parts.Count -ne 5) { throw "Expected 5 RC18 bundle chunks, found $($Parts.Count)" }
 
@@ -49,24 +50,24 @@ jobs:
           [IO.File]::WriteAllBytes($Archive, $ArchiveBytes.ToArray())
           $ArchiveBytes.Dispose()
           $ActualArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
-          if ($ActualArchiveHash -ne $ExpectedArchiveHash) { throw "Exact RC18 archive hash mismatch: $ActualArchiveHash" }
+          if ($ActualArchiveHash -ne $ExpectedArchiveHash) { throw "RC18 archive hash mismatch: $ActualArchiveHash" }
 
           $Extract = Join-Path $PWD 'rc18-powershell-exact'
           New-Item -ItemType Directory -Path $Extract -Force | Out-Null
           tar -xzf $Archive -C $Extract
           if ($LASTEXITCODE -ne 0) { throw "tar extraction failed with exit code $LASTEXITCODE" }
           $ScriptRoot = Join-Path $Extract 'scripts\windows'
-          $Files = @(Get-ChildItem -LiteralPath $ScriptRoot -Filter '*.ps1' -File -Recurse | Sort-Object FullName)
+          $Files = @(Get-ChildItem -LiteralPath $ScriptRoot -Filter '*.ps1' -File -Recurse | Sort-Object Name)
           if ($Files.Count -ne 15) { throw "Expected 15 exact RC18 PowerShell scripts, found $($Files.Count)" }
 
           $Lines = foreach ($File in $Files) {
             $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $File.FullName).Hash.ToLowerInvariant()
-            $Relative = $File.FullName.Substring($Extract.Length + 1).Replace('\\','/')
-            "$Hash  $Relative"
+            "$Hash  scripts/windows/$($File.Name)"
           }
           $Ledger = ($Lines -join "`n") + "`n"
           [IO.File]::WriteAllText((Join-Path $PWD 'powershell-ledger.txt'), $Ledger, [Text.UTF8Encoding]::new($false))
           $LedgerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath 'powershell-ledger.txt').Hash.ToLowerInvariant()
+          if ($LedgerHash -ne $ExpectedLedgerHash) { throw "RC18 script ledger mismatch: $LedgerHash" }
           "archive_sha256=$ActualArchiveHash" | Set-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
           "script_count=$($Files.Count)" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
           "ledger_sha256=$LedgerHash" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
