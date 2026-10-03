@@ -6,7 +6,10 @@ param(
   [string]$WorkDir,
 
   [Parameter(Mandatory = $true)]
-  [string]$ConsoleLog
+  [string]$ConsoleLog,
+
+  [Parameter(Mandatory = $false)]
+  [switch]$SkipValidationSuite
 )
 
 $ErrorActionPreference = "Stop"
@@ -21,8 +24,12 @@ $LocalUserId = "00000000-0000-4000-8000-000000000001"
 $LocalUrl = "http://127.0.0.1:3000"
 $DatabaseUrl = "postgresql://$DbUser`:$DbPassword@127.0.0.1:$DbPort/$DbName"
 $StateDir = Join-Path $SourceRoot ".local-test"
+$LocalBinDir = Join-Path $StateDir "bin"
+$PnpmShim = Join-Path $LocalBinDir "pnpm.cmd"
 $WebPidFile = Join-Path $StateDir "web.pid"
+$AutomationPidFile = Join-Path $StateDir "automation-worker.pid"
 $WebLog = Join-Path $WorkDir "WEB_SERVER.log"
+$AutomationLog = Join-Path $WorkDir "AUTOMATION_WORKER.log"
 $ResultJson = Join-Path $WorkDir "LOCAL_TEST_RESULT.json"
 $ResultTxt = Join-Path $WorkDir "RESULTADO.txt"
 
@@ -59,6 +66,22 @@ function Command-Exists([string]$Name) {
   return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Ensure-DockerDaemon {
+  & docker.exe info *> $null
+  if ($LASTEXITCODE -eq 0) { return $true }
+  $candidates = @(
+    (Join-Path $env:ProgramFiles "Docker\Docker\Docker Desktop.exe"),
+    (Join-Path ${env:ProgramFiles(x86)} "Docker\Docker\Docker Desktop.exe"),
+    (Join-Path $env:LOCALAPPDATA "Docker\Docker Desktop.exe")
+  ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path -LiteralPath $_) }
+  $desktop = $candidates | Select-Object -First 1
+  if ($null -eq $desktop) { return $false }
+  try { Start-Process -FilePath $desktop | Out-Null } catch { return $false }
+  $deadline = (Get-Date).AddMinutes(3)
+  do { Start-Sleep -Seconds 3; & docker.exe info *> $null; if ($LASTEXITCODE -eq 0) { return $true } } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
 function Wait-Http200([string]$Url, [int]$TimeoutSeconds = 90) {
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   do {
@@ -89,6 +112,8 @@ function Write-Result {
     databaseContainer = $DbContainer
     databasePort = $DbPort
     webLog = $WebLog
+    automationWorkerLog = $AutomationLog
+    mode = $(if ($SkipValidationSuite) { "START_ONLY" } else { "FULL_VALIDATION" })
     finishedAt = (Get-Date).ToString("o")
   }
   $payload | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $ResultJson -Encoding UTF8
@@ -107,7 +132,8 @@ function Write-Result {
 
 try {
   Set-Location -LiteralPath $SourceRoot
-  Log "Inicio do teste local completo."
+  if ($SkipValidationSuite) { Log "Inicio do runtime local para uso do dashboard/Test Center." }
+  else { Log "Inicio do teste local completo." }
 
   Log "[1/9] Validando Node, Corepack e Docker..."
   if (-not (Command-Exists "node.exe")) { Fail "Node.js nao encontrado. Instale Node.js 22 LTS e execute novamente." 10 }
@@ -119,12 +145,16 @@ try {
   if ($nodeMajor -lt 20) { Fail "Node.js 20+ obrigatorio. Detectado: v$nodeVersion" 13 }
   Log "Node detectado: v$nodeVersion"
 
-  & docker.exe info *> $null
-  if ($LASTEXITCODE -ne 0) { Fail "Docker Desktop esta instalado, mas o daemon nao esta ativo." 14 }
+  if (-not (Ensure-DockerDaemon)) { Fail "Docker Desktop esta instalado, mas o daemon nao ficou ativo." 14 }
 
   Log "[2/9] Preparando pnpm e dependencias..."
-  Invoke-External -FilePath "corepack.cmd" -Arguments @("enable") -Label "corepack enable"
-  Invoke-External -FilePath "corepack.cmd" -Arguments @("prepare", "pnpm@9.15.4", "--activate") -Label "pnpm 9.15.4"
+  Invoke-External -FilePath "corepack.cmd" -Arguments @("prepare", "pnpm@9.15.4", "--activate") -Label "preparar pnpm 9.15.4 via Corepack"
+  New-Item -ItemType Directory -Path $LocalBinDir -Force | Out-Null
+  @"
+@echo off
+corepack.cmd pnpm %*
+"@ | Set-Content -LiteralPath $PnpmShim -Encoding ASCII
+  $env:PATH = "$LocalBinDir;$env:PATH"
   Invoke-External -FilePath "pnpm.cmd" -Arguments @("install", "--frozen-lockfile") -Label "pnpm install --frozen-lockfile"
 
   Log "[3/9] Criando PostgreSQL local isolado..."
@@ -140,8 +170,8 @@ try {
     "-e", "POSTGRES_PASSWORD=$DbPassword",
     "-e", "POSTGRES_DB=$DbName",
     "-p", "127.0.0.1:$DbPort`:5432",
-    "postgres:16-alpine"
-  ) -Label "docker postgres:16-alpine"
+    "postgres:17-alpine"
+  ) -Label "docker postgres:17-alpine"
 
   $dbReady = $false
   for ($attempt = 1; $attempt -le 45; $attempt++) {
@@ -175,7 +205,7 @@ on conflict (id) do nothing;
   Invoke-External -FilePath "docker.exe" -Arguments @("cp", $bootstrapSql, "$DbContainer`:/tmp/bootstrap-local.sql") -Label "docker cp bootstrap"
   Invoke-External -FilePath "docker.exe" -Arguments @("exec", $DbContainer, "psql", "-U", $DbUser, "-d", $DbName, "-v", "ON_ERROR_STOP=1", "-f", "/tmp/bootstrap-local.sql") -Label "bootstrap auth local"
 
-  Log "[5/9] Aplicando migrations portaveis 001-012..."
+  Log "[5/9] Aplicando migrations portaveis e modulos de produto..."
   $previousDatabaseUrl = $env:DATABASE_URL
   $env:DATABASE_URL = $DatabaseUrl
   try {
@@ -204,12 +234,16 @@ INSTAGRAM_OAUTH_TOKEN_ENCODING=multipart
 INSTAGRAM_LONG_LIVED_TOKEN_URL=https://graph.instagram.com/access_token
 "@ | Set-Content -LiteralPath $envFile -Encoding UTF8
 
-  Log "[7/9] Rodando typecheck, testes e build..."
-  Invoke-External -FilePath "pnpm.cmd" -Arguments @("typecheck") -Label "pnpm typecheck"
-  Invoke-External -FilePath "pnpm.cmd" -Arguments @("test") -Label "pnpm test"
-  Invoke-External -FilePath "pnpm.cmd" -Arguments @("build") -Label "pnpm build"
+  if ($SkipValidationSuite) {
+    Log "[7/9] Suite profunda adiada para o botao Testar ferramenta no Test Center."
+  } else {
+    Log "[7/9] Rodando typecheck, testes e build..."
+    Invoke-External -FilePath "pnpm.cmd" -Arguments @("typecheck") -Label "pnpm typecheck"
+    Invoke-External -FilePath "pnpm.cmd" -Arguments @("test") -Label "pnpm test"
+    Invoke-External -FilePath "pnpm.cmd" -Arguments @("build") -Label "pnpm build"
+  }
 
-  Log "[8/9] Iniciando dashboard local..."
+  Log "[8/9] Iniciando runtime de automacoes e dashboard local..."
   if (Test-Path -LiteralPath $WebPidFile) {
     $oldPid = (Get-Content -LiteralPath $WebPidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
     if ($oldPid -match '^\d+$') {
@@ -217,6 +251,18 @@ INSTAGRAM_LONG_LIVED_TOKEN_URL=https://graph.instagram.com/access_token
     }
     Remove-Item -LiteralPath $WebPidFile -Force -ErrorAction SilentlyContinue
   }
+
+  if (Test-Path -LiteralPath $AutomationPidFile) {
+    $oldAutomationPid = (Get-Content -LiteralPath $AutomationPidFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+    if ($oldAutomationPid -match '^\d+$') { Stop-Process -Id ([int]$oldAutomationPid) -Force -ErrorAction SilentlyContinue }
+    Remove-Item -LiteralPath $AutomationPidFile -Force -ErrorAction SilentlyContinue
+  }
+  $automationCommand = "Set-Location -LiteralPath '$($SourceRoot.Replace("'", "''"))'; `$env:DATABASE_URL='$DatabaseUrl'; pnpm.cmd --filter @automation/worker-automation start *>> '$($AutomationLog.Replace("'", "''"))'"
+  $automationProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @(
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $automationCommand
+  ) -WorkingDirectory $SourceRoot -WindowStyle Hidden -PassThru
+  Set-Content -LiteralPath $AutomationPidFile -Value $automationProcess.Id -Encoding ASCII
+  Log "Automation worker PID: $($automationProcess.Id)"
 
   $webCommand = "Set-Location -LiteralPath '$($SourceRoot.Replace("'", "''"))'; pnpm.cmd --filter @automation/web dev *>> '$($WebLog.Replace("'", "''"))'"
   $webProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @(
@@ -233,7 +279,7 @@ INSTAGRAM_LONG_LIVED_TOKEN_URL=https://graph.instagram.com/access_token
   }
 
   Log "[9/9] Smoke test das telas principais..."
-  $paths = @("/", "/connections", "/reliability")
+  $paths = @("/", "/inbox", "/contacts", "/automations", "/campaigns", "/analytics", "/ai", "/connections", "/reliability", "/testing", "/labs")
   foreach ($path in $paths) {
     if (-not (Wait-Http200 "$LocalUrl$path" 30)) {
       Fail "Tela local falhou no smoke test: $path" 32
@@ -241,9 +287,15 @@ INSTAGRAM_LONG_LIVED_TOKEN_URL=https://graph.instagram.com/access_token
     Log "HTTP 200: $path"
   }
 
-  Write-Result -Status "PASS" -ExitCode 0 -Message "Auditoria completa concluida; dashboard local ativo."
-  Log "TESTE LOCAL PASS. Dashboard: $LocalUrl"
-  Start-Process $LocalUrl | Out-Null
+  if ($SkipValidationSuite) {
+    Write-Result -Status "PASS" -ExitCode 0 -Message "Dashboard local ativo; suite profunda disponivel no Test Center."
+    Log "RUNTIME LOCAL ATIVO. Dashboard: $LocalUrl"
+  } else {
+    Write-Result -Status "PASS" -ExitCode 0 -Message "Auditoria completa concluida; dashboard local ativo."
+    Log "TESTE LOCAL PASS. Dashboard: $LocalUrl"
+  }
+  if ($SkipValidationSuite) { Start-Process "$LocalUrl/testing" | Out-Null }
+  else { Start-Process $LocalUrl | Out-Null }
   Start-Process explorer.exe $WorkDir | Out-Null
   exit 0
 } catch {
