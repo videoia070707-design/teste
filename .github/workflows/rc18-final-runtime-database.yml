@@ -67,11 +67,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker run -d --name rc18-final-db \
-            -e POSTGRES_USER=postgres \
-            -e POSTGRES_PASSWORD=postgres \
-            -e POSTGRES_DB=automation_runtime \
-            -p 55432:5432 postgres:17-alpine
+          docker run -d --name rc18-final-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=automation_runtime -p 55432:5432 postgres:17-alpine
           for attempt in $(seq 1 60); do
             docker exec rc18-final-db pg_isready -U postgres -d automation_runtime >/dev/null 2>&1 && break
             sleep 1
@@ -90,15 +86,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          nohup env DATABASE_URL="$DATABASE_URL" AUTOMATION_WORKER_ID='gha-rc18-final' \
-            pnpm --filter @automation/worker-automation start \
-            > "$RUNNER_TEMP/worker.log" 2>&1 &
+          nohup env DATABASE_URL="$DATABASE_URL" AUTOMATION_WORKER_ID='gha-rc18-final' pnpm --filter @automation/worker-automation start > "$RUNNER_TEMP/worker.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/worker.pid"
-
-          nohup env DATABASE_URL="$DATABASE_URL" DATABASE_POOL_MAX="$DATABASE_POOL_MAX" \
-            APP_ORIGIN="$APP_ORIGIN" LOCAL_TEST_MODE="$LOCAL_TEST_MODE" PORT=3000 \
-            pnpm --filter @automation/web start \
-            > "$RUNNER_TEMP/web.log" 2>&1 &
+          nohup env DATABASE_URL="$DATABASE_URL" DATABASE_POOL_MAX="$DATABASE_POOL_MAX" APP_ORIGIN="$APP_ORIGIN" LOCAL_TEST_MODE="$LOCAL_TEST_MODE" PORT=3000 pnpm --filter @automation/web start > "$RUNNER_TEMP/web.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/web.pid"
 
       - name: Wait for healthy runtime
@@ -144,29 +134,7 @@ jobs:
             find "$OUT" -maxdepth 4 -type f -print || true
             exit 92
           fi
-          STATUS_FILE="$STATUS" RUN_ID_VALUE="$RUN_ID" RUNNER_EXIT="$runner_exit" node <<'NODE'
-          const fs = require('fs');
-          const status = JSON.parse(fs.readFileSync(process.env.STATUS_FILE, 'utf8'));
-          const steps = new Map((status.steps || []).map((s) => [s.id, s]));
-          const pick = (id) => ({ state: steps.get(id)?.state ?? 'MISSING', message: steps.get(id)?.message ?? null });
-          const http = pick('http');
-          const browser = pick('browser');
-          const database = pick('database');
-          const runtimeStatus = http.state === 'PASS' && browser.state === 'PASS' ? 'PASS' : 'FAIL';
-          const databaseStatus = database.state === 'PASS' ? 'PASS' : 'FAIL';
-          const base = {
-            schemaVersion: 5,
-            exactRc18: true,
-            sourceBranch: 'automation-platform-rc18-final-qualification',
-            runId: process.env.RUN_ID_VALUE,
-            runnerExit: Number(process.env.RUNNER_EXIT),
-            testBatteryState: status.state,
-            generatedAt: new Date().toISOString()
-          };
-          fs.writeFileSync('qualification/results/rc18-final-runtime-browser.json', JSON.stringify({ ...base, stage: 'local-runtime-browser', status: runtimeStatus, checks: { http, browser } }, null, 2) + '\n');
-          fs.writeFileSync('qualification/results/rc18-final-database-drills.json', JSON.stringify({ ...base, stage: 'database-docker-drills', status: databaseStatus, checks: { database } }, null, 2) + '\n');
-          console.log(JSON.stringify({ runtimeStatus, databaseStatus, http, browser, database }, null, 2));
-NODE
+          STATUS_FILE="$STATUS" RUN_ID_VALUE="$RUN_ID" RUNNER_EXIT="$runner_exit" node -e "const fs=require('fs');const status=JSON.parse(fs.readFileSync(process.env.STATUS_FILE,'utf8'));const steps=new Map((status.steps||[]).map(s=>[s.id,s]));const pick=id=>({state:steps.get(id)?.state??'MISSING',message:steps.get(id)?.message??null});const http=pick('http'),browser=pick('browser'),database=pick('database');const runtimeStatus=http.state==='PASS'&&browser.state==='PASS'?'PASS':'FAIL';const databaseStatus=database.state==='PASS'?'PASS':'FAIL';const base={schemaVersion:5,exactRc18:true,sourceBranch:'automation-platform-rc18-final-qualification',runId:process.env.RUN_ID_VALUE,runnerExit:Number(process.env.RUNNER_EXIT),testBatteryState:status.state,generatedAt:new Date().toISOString()};fs.writeFileSync('qualification/results/rc18-final-runtime-browser.json',JSON.stringify({...base,stage:'local-runtime-browser',status:runtimeStatus,checks:{http,browser}},null,2)+'\\n');fs.writeFileSync('qualification/results/rc18-final-database-drills.json',JSON.stringify({...base,stage:'database-docker-drills',status:databaseStatus,checks:{database}},null,2)+'\\n');console.log(JSON.stringify({runtimeStatus,databaseStatus,http,browser,database},null,2));"
           exit 0
 
       - name: Publish RC18 final qualification evidence
@@ -190,16 +158,7 @@ NODE
         shell: bash
         run: |
           set -euo pipefail
-          node <<'NODE'
-          const fs = require('fs');
-          let failed = false;
-          for (const file of ['qualification/results/rc18-final-runtime-browser.json', 'qualification/results/rc18-final-database-drills.json']) {
-            const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-            console.log(JSON.stringify(value, null, 2));
-            if (value.status !== 'PASS') failed = true;
-          }
-          if (failed) process.exit(1);
-NODE
+          node -e "const fs=require('fs');let failed=false;for(const file of ['qualification/results/rc18-final-runtime-browser.json','qualification/results/rc18-final-database-drills.json']){const value=JSON.parse(fs.readFileSync(file,'utf8'));console.log(JSON.stringify(value,null,2));if(value.status!=='PASS')failed=true;}if(failed)process.exit(1);"
 
       - name: Cleanup
         if: always()
