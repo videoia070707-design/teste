@@ -1,4 +1,4 @@
-name: RC18 Runtime Browser Database Qualification V3
+name: RC18 Runtime Browser Database Exact V4
 
 on:
   push:
@@ -13,9 +13,8 @@ permissions:
 
 jobs:
   qualify:
-    name: Exact RC18 runtime + browser + database drills v3
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       CI: 'true'
       NEXT_TELEMETRY_DISABLED: '1'
@@ -25,11 +24,13 @@ jobs:
       DATABASE_POOL_MAX: '5'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: automation-platform-rc18-qualification
       - uses: actions/setup-node@v4
         with:
           node-version: '22.16.0'
 
-      - name: Reconstruct and apply exact RC18 patch
+      - name: Reconstruct exact RC18
         shell: bash
         run: |
           set -euo pipefail
@@ -38,21 +39,16 @@ jobs:
           test "${#parts[@]}" -eq 12
           encoded="$(cat "${parts[@]}" | tr -d '\r\n\t ')"
           remainder=$((${#encoded} % 4))
-          case "$remainder" in
-            0) ;;
-            2) encoded="${encoded}==" ;;
-            3) encoded="${encoded}=" ;;
-            *) echo "invalid base64 length ${#encoded}"; exit 91 ;;
-          esac
-          printf '%s' "$encoded" | base64 --decode > "$RUNNER_TEMP/rc18-core.patch.gz"
-          gzip -t "$RUNNER_TEMP/rc18-core.patch.gz"
-          gzip -dc "$RUNNER_TEMP/rc18-core.patch.gz" > "$RUNNER_TEMP/rc18-core.patch"
-          git apply --binary --check "$RUNNER_TEMP/rc18-core.patch"
-          git apply --binary "$RUNNER_TEMP/rc18-core.patch"
+          case "$remainder" in 0) ;; 2) encoded="${encoded}==" ;; 3) encoded="${encoded}=" ;; *) exit 91 ;; esac
+          printf '%s' "$encoded" | base64 --decode > "$RUNNER_TEMP/rc18.patch.gz"
+          gzip -dc "$RUNNER_TEMP/rc18.patch.gz" > "$RUNNER_TEMP/rc18.patch"
+          git apply --binary --check "$RUNNER_TEMP/rc18.patch"
+          git apply --binary "$RUNNER_TEMP/rc18.patch"
+          test -f database/078_transactional_local_upgrade.sql
           test -f scripts/test-battery-runner.mjs
           test -f apps/worker-automation/package.json
 
-      - name: Install exact toolchain
+      - name: Install toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -61,117 +57,81 @@ jobs:
           test "$(pnpm --version)" = '9.15.4'
           pnpm install --frozen-lockfile
 
-      - name: Start PostgreSQL 17 and migrate
+      - name: Start PostgreSQL and migrate
         shell: bash
         run: |
           set -euo pipefail
-          docker run -d --name rc18-runtime-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=automation_runtime -p 55432:5432 postgres:17-alpine
-          for attempt in $(seq 1 60); do
-            docker exec rc18-runtime-db pg_isready -U postgres -d automation_runtime >/dev/null 2>&1 && break
-            sleep 1
-          done
-          docker exec rc18-runtime-db pg_isready -U postgres -d automation_runtime
+          docker run -d --name rc18-exact-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=automation_runtime -p 55432:5432 postgres:17-alpine
+          for attempt in $(seq 1 60); do docker exec rc18-exact-db pg_isready -U postgres -d automation_runtime >/dev/null 2>&1 && break; sleep 1; done
+          docker exec rc18-exact-db pg_isready -U postgres -d automation_runtime
           pnpm --filter @automation/storage-postgres migrate
-          latest="$(docker exec rc18-runtime-db psql -U postgres -d automation_runtime -Atqc 'select max(version) from app_private.schema_migrations;')"
+          latest="$(docker exec rc18-exact-db psql -U postgres -d automation_runtime -Atqc 'select max(version) from app_private.schema_migrations;')"
+          echo "latest=$latest"
           test "$latest" = '078_transactional_local_upgrade.sql'
 
-      - name: Build RC18
+      - name: Build exact RC18
         run: pnpm build
 
       - name: Start worker and web
         shell: bash
         run: |
           set -euo pipefail
-          nohup env DATABASE_URL="$DATABASE_URL" AUTOMATION_WORKER_ID='github-actions-runtime-proof-v3' pnpm --filter @automation/worker-automation start > "$RUNNER_TEMP/worker-automation.log" 2>&1 &
-          echo $! > "$RUNNER_TEMP/worker.pid"
-          nohup env DATABASE_URL="$DATABASE_URL" DATABASE_POOL_MAX="$DATABASE_POOL_MAX" APP_ORIGIN="$APP_ORIGIN" LOCAL_TEST_MODE="$LOCAL_TEST_MODE" PORT=3000 pnpm --filter @automation/web start > "$RUNNER_TEMP/web.log" 2>&1 &
-          echo $! > "$RUNNER_TEMP/web.pid"
+          nohup env DATABASE_URL="$DATABASE_URL" AUTOMATION_WORKER_ID='gha-rc18-exact' pnpm --filter @automation/worker-automation start > "$RUNNER_TEMP/worker.log" 2>&1 & echo $! > "$RUNNER_TEMP/worker.pid"
+          nohup env DATABASE_URL="$DATABASE_URL" DATABASE_POOL_MAX="$DATABASE_POOL_MAX" APP_ORIGIN="$APP_ORIGIN" LOCAL_TEST_MODE="$LOCAL_TEST_MODE" PORT=3000 pnpm --filter @automation/web start > "$RUNNER_TEMP/web.log" 2>&1 & echo $! > "$RUNNER_TEMP/web.pid"
 
-      - name: Capture startup diagnostics
-        id: startup
+      - name: Wait for runtime
         shell: bash
         run: |
-          set +e
-          mkdir -p qualification/results
-          healthy=0
-          live=000; ready=000; local_status=000; heartbeat=missing
-          for attempt in $(seq 1 90); do
-            live="$(curl -sS -o /tmp/live.json -w '%{http_code}' "$APP_ORIGIN/api/health/live" 2>/dev/null || true)"
-            ready="$(curl -sS -o /tmp/ready.json -w '%{http_code}' "$APP_ORIGIN/api/health/ready" 2>/dev/null || true)"
-            local_status="$(curl -sS -o /tmp/local-status.json -w '%{http_code}' "$APP_ORIGIN/api/runtime/local-status?probe=boot" 2>/dev/null || true)"
-            heartbeat="$(docker exec rc18-runtime-db psql -U postgres -d automation_runtime -Atqc \"select coalesce((select runtime_state||'|'||(last_seen_at>=now()-interval '30 seconds')::text from app_private.worker_heartbeats where worker_kind='worker-automation' and worker_id='github-actions-runtime-proof-v3' order by last_seen_at desc limit 1),'missing');\" 2>/dev/null || true)"
-            if [ "$live" = 200 ] && [ "$ready" = 200 ] && [ "$local_status" = 200 ] && [[ "$heartbeat" == active\|true ]]; then healthy=1; break; fi
+          set -euo pipefail
+          ok=0
+          for attempt in $(seq 1 120); do
+            live=$(curl -sS -o /tmp/live.json -w '%{http_code}' "$APP_ORIGIN/api/health/live" 2>/dev/null || true)
+            ready=$(curl -sS -o /tmp/ready.json -w '%{http_code}' "$APP_ORIGIN/api/health/ready" 2>/dev/null || true)
+            boot=$(curl -sS -o /tmp/boot.json -w '%{http_code}' "$APP_ORIGIN/api/runtime/local-status?probe=boot" 2>/dev/null || true)
+            hb=$(docker exec rc18-exact-db psql -U postgres -d automation_runtime -Atqc "select coalesce((select runtime_state||'|'||(last_seen_at>=now()-interval '30 seconds')::text from app_private.worker_heartbeats where worker_kind='worker-automation' and worker_id='gha-rc18-exact' order by last_seen_at desc limit 1),'missing');" 2>/dev/null || true)
+            if [ "$live" = 200 ] && [ "$ready" = 200 ] && [ "$boot" = 200 ] && [[ "$hb" == active\|true ]]; then ok=1; break; fi
             sleep 1
           done
-          LIVE_CODE="$live" READY_CODE="$ready" LOCAL_STATUS_CODE="$local_status" HEARTBEAT="$heartbeat" HEALTHY="$healthy" RUNNER_TEMP_VALUE="$RUNNER_TEMP" node <<'NODE'
-          const fs=require('fs');
-          const read=p=>{try{return fs.readFileSync(p,'utf8')}catch{return ''}};
-          const t=process.env.RUNNER_TEMP_VALUE;
-          const r={schemaVersion:1,healthy:process.env.HEALTHY==='1',liveCode:process.env.LIVE_CODE,readyCode:process.env.READY_CODE,localStatusCode:process.env.LOCAL_STATUS_CODE,heartbeat:process.env.HEARTBEAT,liveBody:read('/tmp/live.json'),readyBody:read('/tmp/ready.json'),localStatusBody:read('/tmp/local-status.json'),webLog:read(t+'/web.log').slice(-12000),workerLog:read(t+'/worker-automation.log').slice(-12000),generatedAt:new Date().toISOString()};
-          fs.writeFileSync('qualification/results/runtime-startup-v3.json',JSON.stringify(r,null,2)+'\n');console.log(JSON.stringify(r,null,2));
-          NODE
-          echo "healthy=$healthy" >> "$GITHUB_OUTPUT"
-          exit 0
+          if [ "$ok" != 1 ]; then tail -200 "$RUNNER_TEMP/web.log" || true; tail -200 "$RUNNER_TEMP/worker.log" || true; cat /tmp/live.json || true; cat /tmp/ready.json || true; cat /tmp/boot.json || true; exit 1; fi
 
-      - name: Run official RC18 Test Center
+      - name: Run official RC18 battery
         id: battery
-        if: always()
         shell: bash
         run: |
           set +e
           RUN_ID="tb-$(date +%s%3N)-$(openssl rand -hex 4)"
-          OUT="$RUNNER_TEMP/rc18-test-runs"
-          mkdir -p "$OUT"
-          export BROWSER_EXECUTABLE="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          OUT="$RUNNER_TEMP/rc18-runs"
+          mkdir -p "$OUT" qualification/results
+          export BROWSER_EXECUTABLE="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
           node scripts/test-battery-runner.mjs --run-id "$RUN_ID" --output-root "$OUT" --origin "$APP_ORIGIN"
-          echo "runner_exit=$?" >> "$GITHUB_OUTPUT"
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "output_root=$OUT" >> "$GITHUB_OUTPUT"
+          runner_exit=$?
+          STATUS="$OUT/$RUN_ID/status.json"
+          if [ ! -f "$STATUS" ]; then echo "status missing: $STATUS"; find "$OUT" -maxdepth 3 -type f -print || true; exit 92; fi
+          STATUS_FILE="$STATUS" RUN_ID_VALUE="$RUN_ID" node <<'NODE'
+          const fs=require('fs');const s=JSON.parse(fs.readFileSync(process.env.STATUS_FILE,'utf8'));const m=new Map((s.steps||[]).map(x=>[x.id,x]));const pick=id=>({state:m.get(id)?.state??'MISSING',message:m.get(id)?.message??null});const http=pick('http'),browser=pick('browser'),database=pick('database');const base={schemaVersion:4,exactRc18:true,runId:process.env.RUN_ID_VALUE,testBatteryState:s.state,generatedAt:new Date().toISOString()};const runtimeStatus=http.state==='PASS'&&browser.state==='PASS'?'PASS':'FAIL';const databaseStatus=database.state==='PASS'?'PASS':'FAIL';fs.writeFileSync('qualification/results/rc18-exact-runtime-browser.json',JSON.stringify({...base,stage:'local-runtime-browser',status:runtimeStatus,checks:{http,browser}},null,2)+'\n');fs.writeFileSync('qualification/results/rc18-exact-database-drills.json',JSON.stringify({...base,stage:'database-docker-drills',status:databaseStatus,checks:{database}},null,2)+'\n');console.log(JSON.stringify({runner_exit,runtimeStatus,databaseStatus,http,browser,database},null,2));
+          NODE
           exit 0
 
-      - name: Publish runtime browser database evidence
+      - name: Publish evidence
         if: always()
         shell: bash
-        env:
-          RUN_ID: ${{ steps.battery.outputs.run_id }}
-          OUT: ${{ steps.battery.outputs.output_root }}
-          STARTUP_HEALTHY: ${{ steps.startup.outputs.healthy }}
         run: |
           set -euo pipefail
-          mkdir -p qualification/results
-          RUNNER_TEMP_VALUE="$RUNNER_TEMP" node - "$OUT" "$RUN_ID" <<'NODE'
-          const fs=require('fs'),path=require('path');const [out,runId]=process.argv.slice(2);const read=p=>{try{return fs.readFileSync(p,'utf8')}catch{return ''}};
-          const r={schemaVersion:3,stage:'runtime-browser-database',status:'FAIL',runId:runId||null,startupHealthy:process.env.STARTUP_HEALTHY==='1',generatedAt:new Date().toISOString(),checks:{},logs:{web:read(process.env.RUNNER_TEMP_VALUE+'/web.log').slice(-12000),worker:read(process.env.RUNNER_TEMP_VALUE+'/worker-automation.log').slice(-12000)}};
-          const p=out&&runId?path.join(out,runId,'status.json'):null;
-          if(p&&fs.existsSync(p)){const s=JSON.parse(fs.readFileSync(p,'utf8'));const m=new Map(s.steps.map(x=>[x.id,x]));for(const id of ['http','browser','database'])r.checks[id]={state:m.get(id)?.state??'MISSING',message:m.get(id)?.message??null};r.status=['http','browser','database'].every(id=>m.get(id)?.state==='PASS')?'PASS':'FAIL';r.testBatteryState=s.state;}else r.error=`TEST_BATTERY_STATUS_MISSING:${p||'no-path'}`;
-          fs.writeFileSync('qualification/results/runtime-browser-database.json',JSON.stringify(r,null,2)+'\n');console.log(JSON.stringify(r,null,2));
-          NODE
+          test -f qualification/results/rc18-exact-runtime-browser.json
+          test -f qualification/results/rc18-exact-database-drills.json
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -f qualification/results/runtime-browser-database.json qualification/results/runtime-startup-v3.json
-          if ! git diff --cached --quiet; then git commit -m 'ci: publish RC18 runtime browser database evidence v3 [skip ci]'; git push origin HEAD:automation-platform-rc18-qualification; fi
+          git add -f qualification/results/rc18-exact-runtime-browser.json qualification/results/rc18-exact-database-drills.json
+          if ! git diff --cached --quiet; then git commit -m 'ci: publish exact RC18 runtime database evidence [skip ci]'; git pull --rebase origin automation-platform-rc18-qualification; git push origin HEAD:automation-platform-rc18-qualification; fi
 
-      - name: Require HTTP browser and database PASS
+      - name: Require runtime browser database PASS
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           node <<'NODE'
-          const fs=require('fs');const e=JSON.parse(fs.readFileSync('qualification/results/runtime-browser-database.json','utf8'));console.log(JSON.stringify(e,null,2));for(const id of ['http','browser','database'])if(e.checks?.[id]?.state!=='PASS')throw new Error(`${id}:${e.checks?.[id]?.state||'MISSING'}`);
+          const fs=require('fs');for(const f of ['qualification/results/rc18-exact-runtime-browser.json','qualification/results/rc18-exact-database-drills.json']){const x=JSON.parse(fs.readFileSync(f,'utf8'));console.log(JSON.stringify(x,null,2));if(x.status!=='PASS')process.exitCode=1}
           NODE
-
-      - name: Upload evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: rc18-runtime-browser-database-v3
-          path: |
-            qualification/results/runtime-browser-database.json
-            qualification/results/runtime-startup-v3.json
-            ${{ steps.battery.outputs.output_root }}/${{ steps.battery.outputs.run_id }}/
-            ${{ runner.temp }}/web.log
-            ${{ runner.temp }}/worker-automation.log
-          if-no-files-found: warn
 
       - name: Cleanup
         if: always()
@@ -179,4 +139,4 @@ jobs:
         run: |
           test ! -f "$RUNNER_TEMP/web.pid" || kill "$(cat "$RUNNER_TEMP/web.pid")" 2>/dev/null || true
           test ! -f "$RUNNER_TEMP/worker.pid" || kill "$(cat "$RUNNER_TEMP/worker.pid")" 2>/dev/null || true
-          docker rm -f rc18-runtime-db >/dev/null 2>&1 || true
+          docker rm -f rc18-exact-db >/dev/null 2>&1 || true
