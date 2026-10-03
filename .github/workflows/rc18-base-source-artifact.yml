@@ -46,3 +46,5 @@ jobs:
           path: ${{ runner.temp }}/snapshot/
           if-no-files-found: error
           retention-days: 1
+
+# qualification export trigger 2026-10-03
