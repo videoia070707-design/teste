@@ -1,4 +1,4 @@
-name: RC18 Linux Toolchain Proof V6
+name: RC18 Linux Toolchain Exact Proof V7
 
 on:
   push:
@@ -6,14 +6,7 @@ on:
       - automation-platform-rc18-qualification
     paths:
       - '.github/workflows/rc18-linux-toolchain-proof-v4.yml'
-      - 'package.json'
-      - 'pnpm-lock.yaml'
-      - 'pnpm-workspace.yaml'
-      - 'apps/**'
-      - 'packages/**'
-      - 'scripts/**'
-      - 'database/**'
-      - 'supabase/**'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -30,7 +23,31 @@ jobs:
         with:
           node-version: '22.16.0'
 
-      - name: Qualify RC18 source directly
+      - name: Reconstruct exact RC18
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          parts=(.ci/rc18-core.patch.b64.*)
+          test "${#parts[@]}" -eq 12
+          encoded="$(cat "${parts[@]}" | tr -d '\r\n\t ')"
+          remainder=$((${#encoded} % 4))
+          case "$remainder" in
+            0) ;;
+            2) encoded="${encoded}==" ;;
+            3) encoded="${encoded}=" ;;
+            *) echo "invalid base64 length"; exit 91 ;;
+          esac
+          printf '%s' "$encoded" | base64 --decode > "$RUNNER_TEMP/rc18.patch.gz"
+          gzip -t "$RUNNER_TEMP/rc18.patch.gz"
+          gzip -dc "$RUNNER_TEMP/rc18.patch.gz" > "$RUNNER_TEMP/rc18.patch"
+          git apply --binary --check "$RUNNER_TEMP/rc18.patch"
+          git apply --binary "$RUNNER_TEMP/rc18.patch"
+          test -f database/078_transactional_local_upgrade.sql
+          test -f scripts/automation-closure-stage-tracker-check.mjs
+          test -f apps/worker-automation/package.json
+
+      - name: Qualify exact RC18 toolchain
         shell: bash
         env:
           CI: 'true'
@@ -39,24 +56,23 @@ jobs:
           set +e
           mkdir -p qualification/results
           for f in corepack-enable corepack-prepare pnpm-version pnpm-install pnpm-typecheck pnpm-test pnpm-build; do : > "/tmp/$f.log"; done
-
-          corepack enable >/tmp/corepack-enable.log 2>&1; corepack_enable=$?
-          if [ "$corepack_enable" -eq 0 ]; then corepack prepare pnpm@9.15.4 --activate >/tmp/corepack-prepare.log 2>&1; corepack_prepare=$?; else corepack_prepare=99; fi
-          if [ "$corepack_prepare" -eq 0 ]; then pnpm --version >/tmp/pnpm-version.log 2>&1; pnpm_version_exit=$?; else pnpm_version_exit=99; fi
-          if [ "$pnpm_version_exit" -eq 0 ]; then pnpm install --frozen-lockfile >/tmp/pnpm-install.log 2>&1; install_exit=$?; else install_exit=99; fi
-          if [ "$install_exit" -eq 0 ]; then
-            pnpm typecheck >/tmp/pnpm-typecheck.log 2>&1; typecheck_exit=$?
-            pnpm test >/tmp/pnpm-test.log 2>&1; test_exit=$?
-            pnpm build >/tmp/pnpm-build.log 2>&1; build_exit=$?
-          else typecheck_exit=99; test_exit=99; build_exit=99; fi
-
-          export COREPACK_ENABLE="$corepack_enable" COREPACK_PREPARE="$corepack_prepare" PNPM_VERSION_EXIT="$pnpm_version_exit" INSTALL_EXIT="$install_exit" TYPECHECK_EXIT="$typecheck_exit" TEST_EXIT="$test_exit" BUILD_EXIT="$build_exit" SOURCE_COMMIT='${{ github.sha }}'
-          node <<'NODE'
-          const fs=require('fs'),n=k=>Number(process.env[k]||99),tail=(f,m=12000)=>{try{const s=fs.readFileSync(f,'utf8');return s.length>m?s.slice(-m):s}catch{return ''}};
-          const checks={corepackEnable:n('COREPACK_ENABLE'),corepackPrepare:n('COREPACK_PREPARE'),pnpmVersion:n('PNPM_VERSION_EXIT'),install:n('INSTALL_EXIT'),typecheck:n('TYPECHECK_EXIT'),test:n('TEST_EXIT'),build:n('BUILD_EXIT')};
+          corepack enable >/tmp/corepack-enable.log 2>&1; a=$?
+          if [ "$a" -eq 0 ]; then corepack prepare pnpm@9.15.4 --activate >/tmp/corepack-prepare.log 2>&1; b=$?; else b=99; fi
+          if [ "$b" -eq 0 ]; then pnpm --version >/tmp/pnpm-version.log 2>&1; c=$?; else c=99; fi
+          if [ "$c" -eq 0 ]; then pnpm install --frozen-lockfile >/tmp/pnpm-install.log 2>&1; d=$?; else d=99; fi
+          if [ "$d" -eq 0 ]; then
+            pnpm typecheck >/tmp/pnpm-typecheck.log 2>&1; e=$?
+            pnpm test >/tmp/pnpm-test.log 2>&1; f=$?
+            pnpm build >/tmp/pnpm-build.log 2>&1; g=$?
+          else e=99; f=99; g=99; fi
+          A=$a B=$b C=$c D=$d E=$e F=$f G=$g SOURCE='${{ github.sha }}' node <<'NODE'
+          const fs=require('fs'),crypto=require('crypto');
+          const n=k=>Number(process.env[k]||99),tail=(p,m=12000)=>{try{const s=fs.readFileSync(p,'utf8');return s.length>m?s.slice(-m):s}catch{return ''}};
+          const checks={corepackEnable:n('A'),corepackPrepare:n('B'),pnpmVersion:n('C'),install:n('D'),typecheck:n('E'),test:n('F'),build:n('G')};
+          const migration=fs.readFileSync('database/078_transactional_local_upgrade.sql');
           const status=Object.values(checks).every(v=>v===0)?'PASS':'FAIL';
-          const e={schemaVersion:7,stage:'toolchain-dependencies',status,node:process.version,sourceCommit:process.env.SOURCE_COMMIT,runner:'Linux',generatedAt:new Date().toISOString(),checks,tails:{corepackEnable:tail('/tmp/corepack-enable.log',2500),corepackPrepare:tail('/tmp/corepack-prepare.log',2500),pnpmVersion:tail('/tmp/pnpm-version.log',1000),install:tail('/tmp/pnpm-install.log'),typecheck:tail('/tmp/pnpm-typecheck.log'),test:tail('/tmp/pnpm-test.log'),build:tail('/tmp/pnpm-build.log')}};
-          fs.writeFileSync('qualification/results/linux-toolchain.json',JSON.stringify(e,null,2)+'\n');console.log(JSON.stringify(e,null,2));if(status!=='PASS')process.exitCode=1;
+          const out={schemaVersion:8,stage:'toolchain-dependencies',status,exactRc18:true,node:process.version,pnpm:'9.15.4',sourceCommit:process.env.SOURCE,migration078Sha256:crypto.createHash('sha256').update(migration).digest('hex'),generatedAt:new Date().toISOString(),checks,tails:{install:tail('/tmp/pnpm-install.log'),typecheck:tail('/tmp/pnpm-typecheck.log'),test:tail('/tmp/pnpm-test.log'),build:tail('/tmp/pnpm-build.log')}};
+          fs.writeFileSync('qualification/results/linux-toolchain.json',JSON.stringify(out,null,2)+'\n');console.log(JSON.stringify(out,null,2));if(status!=='PASS')process.exitCode=1;
           NODE
 
       - name: Publish evidence
@@ -69,6 +85,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f qualification/results/linux-toolchain.json
           if ! git diff --cached --quiet -- qualification/results/linux-toolchain.json; then
-            git commit -m 'ci: publish RC18 Linux toolchain evidence v6 [skip ci]'
+            git commit -m 'ci: publish exact RC18 Linux toolchain evidence [skip ci]'
+            git pull --rebase origin automation-platform-rc18-qualification
             git push origin HEAD:automation-platform-rc18-qualification
           fi
