@@ -1,0 +1,20 @@
+{
+  "archive": "RC18-qualification-source.tar.xz",
+  "archive_bytes": 405924,
+  "archive_sha256": "18006252c9bf8d3ef8bd915a750e866c62cbe3f753f5fff9aabccfebaa4b738f",
+  "base64_chars": 541232,
+  "parts": [
+    {"name":"part-000.b64","chars":48000,"sha256":"f64f8d3d54b8e0dda3cfef2a6394e23cad5a952c9b678bf51ec198616682599e"},
+    {"name":"part-001.b64","chars":48000,"sha256":"8bdc4720e758cb80a4ddfd06149ddb4e36f26f33c31af68af7648f37dac4ca02"},
+    {"name":"part-002.b64","chars":48000,"sha256":"3c87f50a80745bc8c9831af886b0eb813b760bca06bbc08b109122a0a21e3250"},
+    {"name":"part-003.b64","chars":48000,"sha256":"40287be93fdfdd4918db73c72b3752d09d9fa7732777ec63091ca267fcddd319"},
+    {"name":"part-004.b64","chars":48000,"sha256":"0be6554a6b50206b8522fd5c3338e5f34f61088ab47456efa74320fa46b22a7f"},
+    {"name":"part-005.b64","chars":48000,"sha256":"95554c5e77f55e334a7411fdf102dc5e2fb22dbe90fb2877d9ef4c86bcd9c59a"},
+    {"name":"part-006.b64","chars":48000,"sha256":"de6424ea9bd07d422c30ccb6ef5539fa92d73e5cce66f1f8bf66aeb6d6c3640e"},
+    {"name":"part-007.b64","chars":48000,"sha256":"0f80ccd29ebf9f9b1f8d9100a6d8f2e1c820443816b673efe05ad523868e1210"},
+    {"name":"part-008.b64","chars":48000,"sha256":"c3b90e16a998d749eca5717853fc75d0e7e00c8abc352447c29dccc8a74aa208"},
+    {"name":"part-009.b64","chars":48000,"sha256":"61d8a2db4e1c98e7f8fe666296c4c7b497e2b6bb0d3872baa5957126b4d63ecb"},
+    {"name":"part-010.b64","chars":48000,"sha256":"3aed27c5c2eaec6639168f09c76ca9d806fff6ed69876a67e521563e27fb7f1b"},
+    {"name":"part-011.b64","chars":13232,"sha256":"55a978f77de1b67a7578faf78de471ca92d45368c6aa4ab41a0d0e77c302d27f"}
+  ]
+}
