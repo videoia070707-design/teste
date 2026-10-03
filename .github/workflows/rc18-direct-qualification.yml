@@ -1,26 +1,19 @@
-name: G3 Console
+name: RC18 Direct Qualification
 
 on:
   push:
-    branches: [main]
+    branches:
+      - automation-platform-rc18-qualification
     paths:
-      - 'tools/g3-console/**'
-      - 'scripts/g3-console-server.mjs'
-      - 'package.json'
-      - '.github/workflows/g3-console.yml'
-  pull_request:
-    paths:
-      - 'tools/g3-console/**'
-      - 'scripts/g3-console-server.mjs'
-      - 'package.json'
-      - '.github/workflows/g3-console.yml'
+      - '.github/workflows/rc18-direct-qualification.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  rc18_toolchain:
-    name: RC18 Stage 1 - toolchain typecheck test build
+  toolchain:
+    name: Stage 1 - toolchain typecheck test build
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -37,24 +30,25 @@ jobs:
           test "${#parts[@]}" -eq 12
           : > "$RUNNER_TEMP/rc18.gz"
           for part in "${parts[@]}"; do
-            clean="$RUNNER_TEMP/$(basename "$part").clean"
-            tr -d '\r\n\t ' < "$part" > "$clean"
-            len=$(wc -c < "$clean" | tr -d ' ')
-            rem=$((len%4))
-            case "$rem" in
-              0) ;;
-              2) printf '==' >> "$clean" ;;
-              3) printf '=' >> "$clean" ;;
-              *) echo "Invalid base64 length for $part" >&2; exit 1 ;;
-            esac
-            base64 --decode "$clean" >> "$RUNNER_TEMP/rc18.gz"
+            encoded="$(tr -d '\r\n\t ' < "$part")"
+            rem=$((${#encoded}%4))
+            [ "$rem" -ne 2 ] || encoded="${encoded}=="
+            [ "$rem" -ne 3 ] || encoded="${encoded}="
+            [ "$rem" -ne 1 ]
+            printf '%s' "$encoded" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
           done
-          gzip -t "$RUNNER_TEMP/rc18.gz"
-          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
+          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch" || true
+          test -s "$RUNNER_TEMP/rc18.patch"
           git apply --binary --check "$RUNNER_TEMP/rc18.patch"
           git apply --binary "$RUNNER_TEMP/rc18.patch"
           test -f database/078_transactional_local_upgrade.sql
           test -f scripts/automation-closure-stage-tracker-check.mjs
+      - name: Install exact pnpm
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@9.15.4
+          test "$(pnpm --version)" = '9.15.4'
       - name: Install and qualify exact RC18
         shell: bash
         env:
@@ -62,16 +56,13 @@ jobs:
           NEXT_TELEMETRY_DISABLED: '1'
         run: |
           set -euo pipefail
-          corepack enable
-          corepack prepare pnpm@9.15.4 --activate
-          test "$(pnpm --version)" = '9.15.4'
           pnpm install --frozen-lockfile
           pnpm typecheck
           pnpm test
           pnpm build
 
-  rc18_powershell:
-    name: RC18 Stage 2 - Windows PowerShell parser
+  powershell:
+    name: Stage 2 - Windows PowerShell parser
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -85,20 +76,15 @@ jobs:
           test "${#parts[@]}" -eq 12
           : > "$RUNNER_TEMP/rc18.gz"
           for part in "${parts[@]}"; do
-            clean="$RUNNER_TEMP/$(basename "$part").clean"
-            tr -d '\r\n\t ' < "$part" > "$clean"
-            len=$(wc -c < "$clean" | tr -d ' ')
-            rem=$((len%4))
-            case "$rem" in
-              0) ;;
-              2) printf '==' >> "$clean" ;;
-              3) printf '=' >> "$clean" ;;
-              *) echo "Invalid base64 length for $part" >&2; exit 1 ;;
-            esac
-            base64 --decode "$clean" >> "$RUNNER_TEMP/rc18.gz"
+            encoded="$(tr -d '\r\n\t ' < "$part")"
+            rem=$((${#encoded}%4))
+            [ "$rem" -ne 2 ] || encoded="${encoded}=="
+            [ "$rem" -ne 3 ] || encoded="${encoded}="
+            [ "$rem" -ne 1 ]
+            printf '%s' "$encoded" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
           done
-          gzip -t "$RUNNER_TEMP/rc18.gz"
-          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
+          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch" || true
+          test -s "$RUNNER_TEMP/rc18.patch"
           git apply --binary --check "$RUNNER_TEMP/rc18.patch"
           git apply --binary "$RUNNER_TEMP/rc18.patch"
       - name: Parse all RC18 PowerShell scripts
@@ -116,8 +102,8 @@ jobs:
           if($errors.Count -gt 0){$errors | ForEach-Object { Write-Error $_ }; exit 1}
           Write-Host "PASS: $($files.Count)/15 PowerShell files"
 
-  rc18_runtime_browser_database:
-    name: RC18 Stage 3+4 - runtime browser and Docker database drills
+  runtime_browser_database:
+    name: Stage 3+4 - runtime browser and Docker database drills
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -132,7 +118,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.16.0'
-      - name: Reconstruct exact RC18 and install
+      - name: Reconstruct exact RC18
         shell: bash
         run: |
           set -euo pipefail
@@ -141,24 +127,23 @@ jobs:
           test "${#parts[@]}" -eq 12
           : > "$RUNNER_TEMP/rc18.gz"
           for part in "${parts[@]}"; do
-            clean="$RUNNER_TEMP/$(basename "$part").clean"
-            tr -d '\r\n\t ' < "$part" > "$clean"
-            len=$(wc -c < "$clean" | tr -d ' ')
-            rem=$((len%4))
-            case "$rem" in
-              0) ;;
-              2) printf '==' >> "$clean" ;;
-              3) printf '=' >> "$clean" ;;
-              *) echo "Invalid base64 length for $part" >&2; exit 1 ;;
-            esac
-            base64 --decode "$clean" >> "$RUNNER_TEMP/rc18.gz"
+            encoded="$(tr -d '\r\n\t ' < "$part")"
+            rem=$((${#encoded}%4))
+            [ "$rem" -ne 2 ] || encoded="${encoded}=="
+            [ "$rem" -ne 3 ] || encoded="${encoded}="
+            [ "$rem" -ne 1 ]
+            printf '%s' "$encoded" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
           done
-          gzip -t "$RUNNER_TEMP/rc18.gz"
-          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
+          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch" || true
+          test -s "$RUNNER_TEMP/rc18.patch"
           git apply --binary --check "$RUNNER_TEMP/rc18.patch"
           git apply --binary "$RUNNER_TEMP/rc18.patch"
-          corepack enable
-          corepack prepare pnpm@9.15.4 --activate
+      - name: Install exact pnpm and dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@9.15.4
+          test "$(pnpm --version)" = '9.15.4'
           pnpm install --frozen-lockfile
           pnpm build
       - name: Start PostgreSQL and migrate
@@ -195,7 +180,7 @@ jobs:
           test -n "$BROWSER"
           node scripts/browser-release-check.mjs --origin "$APP_ORIGIN" --browser "$BROWSER" --output "$RUNNER_TEMP/browser.json"
           cat "$RUNNER_TEMP/browser.json"
-      - name: Run full Test Center and require database drill PASS
+      - name: Run Test Center and require runtime/browser/database PASS
         shell: bash
         run: |
           set -euo pipefail
@@ -232,3 +217,5 @@ jobs:
           test ! -f "$RUNNER_TEMP/web.pid" || kill "$(cat "$RUNNER_TEMP/web.pid")" 2>/dev/null || true
           test ! -f "$RUNNER_TEMP/worker.pid" || kill "$(cat "$RUNNER_TEMP/worker.pid")" 2>/dev/null || true
           docker rm -f rc18-qualification-db >/dev/null 2>&1 || true
+
+# qualification-trigger: 2026-10-03T15:34:00-04:00

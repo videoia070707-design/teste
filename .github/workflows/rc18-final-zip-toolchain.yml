@@ -1,0 +1,52 @@
+name: RC18 Final ZIP Toolchain
+on:
+  push:
+    branches: [automation-platform-rc18-qualification]
+    paths: ['.github/workflows/rc18-final-zip-toolchain.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: automation-platform-rc18-qualification}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22.16.0'}
+      - name: Reconstruct final RC18 source
+        shell: bash
+        run: |
+          set -euo pipefail; shopt -s nullglob
+          p=(.ci/rc18-core.patch.b64.*); test ${#p[@]} -eq 12
+          e="$(cat "${p[@]}" | tr -d '\r\n\t ')"; r=$((${#e}%4))
+          [ $r -eq 0 ] || { [ $r -eq 2 ] && e="${e}==" || { [ $r -eq 3 ] && e="${e}=" || exit 91; }; }
+          printf '%s' "$e" | base64 -d > /tmp/r.gz; gzip -t /tmp/r.gz; gzip -dc /tmp/r.gz >/tmp/r.patch
+          git apply --binary --check /tmp/r.patch; git apply --binary /tmp/r.patch
+          echo 'ca1791e5d8937b7d3115d4cbc18b09215524e27b31639973d35b4f63e6af884c  package.json' | sha256sum -c -
+          echo 'be2008d51a26811740d2f4703553cb7bae69dc4555c6e48a542671496ca48662  pnpm-lock.yaml' | sha256sum -c -
+          echo '16458af549e4e79edc91ffa436ad6f5ab45343b28a44559a636e0515a6e3848f  database/078_transactional_local_upgrade.sql' | sha256sum -c -
+          test "$(find apps packages -mindepth 2 -maxdepth 2 -name package.json -type f | wc -l | tr -d ' ')" = 14
+          test -f scripts/automation-closure-stage-tracker-check.mjs
+          test -f apps/worker-automation/package.json
+      - name: Activate exact pnpm
+        shell: bash
+        run: corepack enable && corepack prepare pnpm@9.15.4 --activate && test "$(pnpm -v)" = 9.15.4
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+      - name: Build
+        run: pnpm build
+      - name: Evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p qualification/results
+          printf '{"stage":"toolchain-dependencies","status":"PASS_IF_JOB_SUCCESS","exactFinalRc18":true,"zipSha256":"61cae1c42ca8177a0f1624637e2ac95ec1088fc50c44ee255964cab82f9d9cdd","sourceCommit":"%s"}\n' "$GITHUB_SHA" > qualification/results/rc18-final-zip-toolchain.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: rc18-final-zip-toolchain, path: qualification/results/rc18-final-zip-toolchain.json, if-no-files-found: error}

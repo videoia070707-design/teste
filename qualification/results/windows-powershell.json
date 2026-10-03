@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 2,
+  "stage": "windows-powershell",
+  "status": "PASS",
+  "archiveParts": 7,
+  "parsedFiles": 15,
+  "expectedFiles": 15,
+  "sourceCommit": "7875af1ff65ac80c9796f2a945a1d0c0dc2fd8ba",
+  "runner": "Windows",
+  "generatedAt": "2026-10-03T01:44:39.7296685Z",
+  "errors": []
+}

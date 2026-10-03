@@ -1,0 +1,195 @@
+name: RC18 Stage 3+4 Historical Snapshot Proof
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - '.github/workflows/rc18-stage34-historical-snapshot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  stage34:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI: 'true'
+      NEXT_TELEMETRY_DISABLED: '1'
+      APP_ORIGIN: 'http://127.0.0.1:3000'
+      LOCAL_TEST_MODE: 'true'
+      DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:55432/automation_runtime'
+      DATABASE_POOL_MAX: '5'
+      RC18_PAYLOAD_COMMIT: '56aa2c71f12f7db77cc1d2ba5996fcd1b50e91c1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: automation-platform-rc18-qualification
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+
+      - name: Reconstruct exact RC18 from proven historical payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/rc18-proven"
+          git cat-file -e "$RC18_PAYLOAD_COMMIT^{commit}"
+          git worktree add --detach "$ROOT" "$RC18_PAYLOAD_COMMIT"
+          cd "$ROOT"
+          shopt -s nullglob
+          parts=(.ci/rc18-core.patch.b64.*)
+          test "${#parts[@]}" -eq 12
+          encoded="$(cat "${parts[@]}" | tr -d '\r\n\t ')"
+          remainder=$((${#encoded} % 4))
+          case "$remainder" in
+            0) ;;
+            2) encoded="${encoded}==" ;;
+            3) encoded="${encoded}=" ;;
+            *) echo 'invalid base64 length'; exit 91 ;;
+          esac
+          printf '%s' "$encoded" | base64 --decode > "$RUNNER_TEMP/rc18.patch.gz"
+          gzip -t "$RUNNER_TEMP/rc18.patch.gz"
+          gzip -dc "$RUNNER_TEMP/rc18.patch.gz" > "$RUNNER_TEMP/rc18.patch"
+          git apply --binary --check "$RUNNER_TEMP/rc18.patch"
+          git apply --binary "$RUNNER_TEMP/rc18.patch"
+          echo 'ca1791e5d8937b7d3115d4cbc18b09215524e27b31639973d35b4f63e6af884c  package.json' | sha256sum -c -
+          echo 'be2008d51a26811740d2f4703553cb7bae69dc4555c6e48a542671496ca48662  pnpm-lock.yaml' | sha256sum -c -
+          echo '16458af549e4e79edc91ffa436ad6f5ab45343b28a44559a636e0515a6e3848f  database/078_transactional_local_upgrade.sql' | sha256sum -c -
+          test -f scripts/test-battery-runner.mjs
+          test -f scripts/browser-release-check.mjs
+          test -f apps/worker-automation/package.json
+
+      - name: Install and build proven RC18
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/rc18-proven"
+          corepack enable
+          corepack prepare pnpm@9.15.4 --activate
+          test "$(pnpm --version)" = '9.15.4'
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm test
+          pnpm build
+
+      - name: Start PostgreSQL 17 and migrate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/rc18-proven"
+          docker run -d --name rc18-proven-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=automation_runtime -p 55432:5432 postgres:17-alpine
+          for i in $(seq 1 90); do
+            docker exec rc18-proven-db pg_isready -U postgres -d automation_runtime >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker exec rc18-proven-db pg_isready -U postgres -d automation_runtime
+          pnpm --filter @automation/storage-postgres migrate
+          latest="$(docker exec rc18-proven-db psql -U postgres -d automation_runtime -Atqc 'select max(version) from app_private.schema_migrations;')"
+          echo "latest=$latest"
+          test "$latest" = '078_transactional_local_upgrade.sql'
+
+      - name: Start web and automation worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/rc18-proven"
+          nohup env DATABASE_URL="$DATABASE_URL" AUTOMATION_WORKER_ID='github-rc18-proven' pnpm --filter @automation/worker-automation start > "$RUNNER_TEMP/worker.log" 2>&1 & echo $! > "$RUNNER_TEMP/worker.pid"
+          nohup env DATABASE_URL="$DATABASE_URL" DATABASE_POOL_MAX="$DATABASE_POOL_MAX" APP_ORIGIN="$APP_ORIGIN" LOCAL_TEST_MODE="$LOCAL_TEST_MODE" PORT=3000 pnpm --filter @automation/web start > "$RUNNER_TEMP/web.log" 2>&1 & echo $! > "$RUNNER_TEMP/web.pid"
+          ok=0
+          for i in $(seq 1 120); do
+            live=$(curl -sS -o /tmp/live -w '%{http_code}' "$APP_ORIGIN/api/health/live" 2>/dev/null || true)
+            ready=$(curl -sS -o /tmp/ready -w '%{http_code}' "$APP_ORIGIN/api/health/ready" 2>/dev/null || true)
+            boot=$(curl -sS -o /tmp/boot -w '%{http_code}' "$APP_ORIGIN/api/runtime/local-status?probe=boot" 2>/dev/null || true)
+            hb=$(docker exec rc18-proven-db psql -U postgres -d automation_runtime -Atqc "select coalesce((select runtime_state||'|'||(last_seen_at>=now()-interval '30 seconds')::text from app_private.worker_heartbeats where worker_kind='worker-automation' and worker_id='github-rc18-proven' order by last_seen_at desc limit 1),'missing');" 2>/dev/null || true)
+            echo "attempt=$i live=$live ready=$ready boot=$boot hb=$hb"
+            if [ "$live" = 200 ] && [ "$ready" = 200 ] && [ "$boot" = 200 ] && [[ "$hb" == active\|true ]]; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" != 1 ]; then
+            cat /tmp/live || true; cat /tmp/ready || true; cat /tmp/boot || true
+            tail -250 "$RUNNER_TEMP/web.log" || true
+            tail -250 "$RUNNER_TEMP/worker.log" || true
+            exit 1
+          fi
+
+      - name: Browser hydration proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/rc18-proven"
+          BROWSER="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$BROWSER"
+          node scripts/browser-release-check.mjs --origin "$APP_ORIGIN" --browser "$BROWSER" --output "$RUNNER_TEMP/browser.json"
+          cat "$RUNNER_TEMP/browser.json"
+
+      - name: Run official RC18 Test Center
+        shell: bash
+        run: |
+          set +e
+          cd "$RUNNER_TEMP/rc18-proven"
+          RUN_ID="tb-$(date +%s%3N)-$(openssl rand -hex 4)"
+          OUT="$RUNNER_TEMP/runs"
+          mkdir -p "$OUT" "$GITHUB_WORKSPACE/qualification/results"
+          export BROWSER_EXECUTABLE="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          node scripts/test-battery-runner.mjs --run-id "$RUN_ID" --output-root "$OUT" --origin "$APP_ORIGIN"
+          runner=$?
+          STATUS="$OUT/$RUN_ID/status.json"
+          if [ ! -f "$STATUS" ]; then echo "missing status: $STATUS"; find "$OUT" -maxdepth 3 -type f -print || true; exit 92; fi
+          STATUS_FILE="$STATUS" RUN_ID_VALUE="$RUN_ID" RUNNER_EXIT="$runner" EVIDENCE_DIR="$GITHUB_WORKSPACE/qualification/results" PAYLOAD_COMMIT="$RC18_PAYLOAD_COMMIT" node <<'NODE'
+          const fs=require('fs'),path=require('path');
+          const s=JSON.parse(fs.readFileSync(process.env.STATUS_FILE,'utf8'));
+          const m=new Map((s.steps||[]).map(x=>[x.id,x]));
+          const p=id=>({state:m.get(id)?.state??'MISSING',message:m.get(id)?.message??null});
+          const http=p('http'),browser=p('browser'),database=p('database');
+          const runtimeStatus=http.state==='PASS'&&browser.state==='PASS'?'PASS':'FAIL';
+          const databaseStatus=database.state==='PASS'?'PASS':'FAIL';
+          const base={schemaVersion:9,exactRc18:true,historicalPayloadCommit:process.env.PAYLOAD_COMMIT,runId:process.env.RUN_ID_VALUE,runnerExit:Number(process.env.RUNNER_EXIT),testBatteryState:s.state,generatedAt:new Date().toISOString()};
+          fs.writeFileSync(path.join(process.env.EVIDENCE_DIR,'rc18-stage3-runtime-browser.json'),JSON.stringify({...base,stage:'local-runtime-browser',status:runtimeStatus,checks:{http,browser}},null,2)+'\n');
+          fs.writeFileSync(path.join(process.env.EVIDENCE_DIR,'rc18-stage4-database-drills.json'),JSON.stringify({...base,stage:'database-docker-drills',status:databaseStatus,checks:{database}},null,2)+'\n');
+          console.log(JSON.stringify({runtimeStatus,databaseStatus,http,browser,database},null,2));
+          NODE
+          exit 0
+
+      - name: Publish evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f qualification/results/rc18-stage3-runtime-browser.json
+          test -f qualification/results/rc18-stage4-database-drills.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -f qualification/results/rc18-stage3-runtime-browser.json qualification/results/rc18-stage4-database-drills.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'ci: publish proven RC18 stage 3+4 evidence [skip ci]'
+            git pull --rebase origin automation-platform-rc18-qualification
+            git push origin HEAD:automation-platform-rc18-qualification
+          fi
+
+      - name: Require stage 3 and 4 PASS
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "const fs=require('fs');let fail=false;for(const f of ['qualification/results/rc18-stage3-runtime-browser.json','qualification/results/rc18-stage4-database-drills.json']){const x=JSON.parse(fs.readFileSync(f,'utf8'));console.log(JSON.stringify(x,null,2));if(x.status!=='PASS')fail=true;}if(fail)process.exit(1);"
+
+      - name: Logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo '--- web ---'; tail -300 "$RUNNER_TEMP/web.log" || true
+          echo '--- worker ---'; tail -300 "$RUNNER_TEMP/worker.log" || true
+          docker logs --tail 300 rc18-proven-db || true
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          test ! -f "$RUNNER_TEMP/web.pid" || kill "$(cat "$RUNNER_TEMP/web.pid")" 2>/dev/null || true
+          test ! -f "$RUNNER_TEMP/worker.pid" || kill "$(cat "$RUNNER_TEMP/worker.pid")" 2>/dev/null || true
+          docker rm -f rc18-proven-db >/dev/null 2>&1 || true
+          git worktree remove --force "$RUNNER_TEMP/rc18-proven" >/dev/null 2>&1 || true

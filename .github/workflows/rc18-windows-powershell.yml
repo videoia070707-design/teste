@@ -1,0 +1,83 @@
+name: RC18 Windows PowerShell Qualification
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - "scripts/windows/**"
+      - ".github/workflows/rc18-windows-powershell.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  powershell-parser:
+    name: PowerShell parser (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout qualification branch
+        uses: actions/checkout@v4
+
+      - name: Verify RC18 PowerShell script set
+        shell: powershell
+        run: |
+          $expected = @(
+            "Apply-Local-Upgrade.ps1",
+            "Backup-Local-Data.ps1",
+            "Prepare-Local-Upgrade.ps1",
+            "Qualify-Local-Release.ps1",
+            "Repair-Local-Environment.ps1",
+            "Reset-Local-Runtime.ps1",
+            "Restore-Local-Primary.ps1",
+            "Rollback-Local-Upgrade.ps1",
+            "Run-Local-Battery.ps1",
+            "Start-Local-Runtime.ps1",
+            "Start-Local-Test.ps1",
+            "Stop-Local-Runtime.ps1",
+            "Stop-Local-Test.ps1",
+            "Test-Local-Restore.ps1",
+            "Test-PowerShellSyntax.ps1"
+          ) | Sort-Object
+          $actual = Get-ChildItem -LiteralPath scripts\windows -Filter *.ps1 -File | Select-Object -ExpandProperty Name | Sort-Object
+          $diff = Compare-Object $expected $actual
+          if ($diff) {
+            $diff | Format-Table | Out-String | Write-Host
+            throw "RC18 PowerShell script set mismatch"
+          }
+          if ($actual.Count -ne 15) { throw "Expected 15 scripts, found $($actual.Count)" }
+          Write-Host "RC18 PowerShell set OK: $($actual.Count) scripts."
+
+      - name: Parse all PowerShell files with Windows PowerShell
+        shell: powershell
+        run: |
+          & .\scripts\windows\Test-PowerShellSyntax.ps1 -DirectoryPath .\scripts\windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Record Windows qualification evidence
+        if: success()
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Path qualification-evidence -Force | Out-Null
+          $result = [ordered]@{
+            schemaVersion = 1
+            stage = "windows-powershell"
+            status = "PASS"
+            runner = $env:RUNNER_NAME
+            os = $env:RUNNER_OS
+            powershell = $PSVersionTable.PSVersion.ToString()
+            scriptCount = 15
+            commit = $env:GITHUB_SHA
+            qualifiedAt = (Get-Date).ToString("o")
+          }
+          $result | ConvertTo-Json | Set-Content -LiteralPath qualification-evidence\windows-powershell.json -Encoding UTF8
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc18-windows-powershell-evidence
+          path: qualification-evidence
+          if-no-files-found: warn

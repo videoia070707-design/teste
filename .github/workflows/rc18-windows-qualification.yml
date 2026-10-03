@@ -1,0 +1,85 @@
+name: RC18 Windows Qualification
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - 'qualification/rc18/windows/**'
+      - '.github/workflows/rc18-windows-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  powershell-parser:
+    name: RC18 PowerShell 15/15
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout qualification branch
+        uses: actions/checkout@v4
+
+      - name: Reconstruct exact Start-Local-Runtime.ps1 from Git blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          root='qualification/rc18/windows'
+          target="$root/Start-Local-Runtime.ps1"
+          : > "$target"
+          for suffix in 00 01 02 03; do
+            git cat-file blob "HEAD:$root/Start-Local-Runtime.part-$suffix" >> "$target"
+          done
+          hash="$(sha256sum "$target" | awk '{print $1}')"
+          if [ "$hash" != 'f08aebd4a2d95bf688850d1ec3940a7306a6461dedc0b2b504de183e3a3e275c' ]; then
+            echo "START_RUNTIME_SHA_MISMATCH:$hash" >&2
+            exit 2
+          fi
+          echo "START_RUNTIME_SHA_PASS:$hash"
+
+      - name: Parse every exact RC18 PowerShell script
+        shell: powershell
+        run: |
+          $root = Join-Path $env:GITHUB_WORKSPACE 'qualification\rc18\windows'
+          $files = Get-ChildItem -LiteralPath $root -Filter '*.ps1' -File | Sort-Object Name
+          if ($files.Count -ne 15) { throw "RC18_WINDOWS_SCRIPT_COUNT_MISMATCH:$($files.Count)" }
+          $failed = $false
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Host "[FAIL] $($file.Name)" -ForegroundColor Red
+              foreach ($parseError in $errors) {
+                Write-Host "  Linha $($parseError.Extent.StartLineNumber): $($parseError.Message)" -ForegroundColor Red
+              }
+            } else {
+              Write-Host "[PASS] $($file.Name)" -ForegroundColor Green
+            }
+          }
+          if ($failed) { exit 2 }
+          New-Item -ItemType Directory -Path qualification-output -Force | Out-Null
+          $startRuntime = Join-Path $root 'Start-Local-Runtime.ps1'
+          @{
+            status = 'PASS'
+            scripts = $files.Count
+            startRuntimeSha256 = (Get-FileHash -LiteralPath $startRuntime -Algorithm SHA256).Hash.ToLowerInvariant()
+            runner = $env:RUNNER_NAME
+            os = $env:RUNNER_OS
+            capturedAt = (Get-Date).ToString('o')
+          } | ConvertTo-Json | Set-Content -LiteralPath 'qualification-output\RC18_WINDOWS_POWERSHELL.json' -Encoding UTF8
+          Write-Host 'RC18_WINDOWS_POWERSHELL_PASS'
+
+      - name: Upload Windows qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc18-windows-powershell-evidence
+          path: qualification-output/RC18_WINDOWS_POWERSHELL.json
+          if-no-files-found: warn

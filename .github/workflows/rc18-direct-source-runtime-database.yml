@@ -1,0 +1,107 @@
+name: RC18 Direct Source Runtime Database
+
+on:
+  push:
+    branches: [automation-platform-rc18-qualification]
+    paths: ['.github/workflows/rc18-direct-source-runtime-database.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    name: Stage 3+4 direct source runtime browser database
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI: 'true'
+      NEXT_TELEMETRY_DISABLED: '1'
+      APP_ORIGIN: 'http://127.0.0.1:3000'
+      LOCAL_TEST_MODE: 'true'
+      DATABASE_URL: 'postgresql://postgres:postgres@127.0.0.1:55432/automation_runtime'
+      DATABASE_POOL_MAX: '5'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Install and build qualified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@9.15.4 --activate
+          test "$(pnpm --version)" = '9.15.4'
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Start PostgreSQL and migrate through 078
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name rc18-direct-db -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=automation_runtime -p 55432:5432 postgres:17-alpine
+          for i in $(seq 1 90); do docker exec rc18-direct-db pg_isready -U postgres -d automation_runtime >/dev/null 2>&1 && break; sleep 1; done
+          docker exec rc18-direct-db pg_isready -U postgres -d automation_runtime
+          pnpm --filter @automation/storage-postgres migrate
+          latest="$(docker exec rc18-direct-db psql -U postgres -d automation_runtime -Atqc 'select max(version) from app_private.schema_migrations;')"
+          test "$latest" = '078_transactional_local_upgrade.sql'
+      - name: Start runtime and require readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          nohup env DATABASE_URL="$DATABASE_URL" AUTOMATION_WORKER_ID='github-rc18-direct-source' pnpm --filter @automation/worker-automation start > "$RUNNER_TEMP/worker.log" 2>&1 & echo $! > "$RUNNER_TEMP/worker.pid"
+          nohup env DATABASE_URL="$DATABASE_URL" DATABASE_POOL_MAX="$DATABASE_POOL_MAX" APP_ORIGIN="$APP_ORIGIN" LOCAL_TEST_MODE="$LOCAL_TEST_MODE" PORT=3000 pnpm --filter @automation/web start > "$RUNNER_TEMP/web.log" 2>&1 & echo $! > "$RUNNER_TEMP/web.pid"
+          ok=0
+          for i in $(seq 1 120); do
+            live=$(curl -sS -o /tmp/live -w '%{http_code}' "$APP_ORIGIN/api/health/live" 2>/dev/null || true)
+            ready=$(curl -sS -o /tmp/ready -w '%{http_code}' "$APP_ORIGIN/api/health/ready" 2>/dev/null || true)
+            boot=$(curl -sS -o /tmp/boot -w '%{http_code}' "$APP_ORIGIN/api/runtime/local-status?probe=boot" 2>/dev/null || true)
+            if [ "$live" = 200 ] && [ "$ready" = 200 ] && [ "$boot" = 200 ]; then ok=1; break; fi
+            sleep 1
+          done
+          if [ "$ok" != 1 ]; then cat /tmp/live || true; cat /tmp/ready || true; cat /tmp/boot || true; tail -200 "$RUNNER_TEMP/web.log" || true; tail -200 "$RUNNER_TEMP/worker.log" || true; exit 1; fi
+      - name: Prove browser hydration
+        shell: bash
+        run: |
+          set -euo pipefail
+          BROWSER="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          test -n "$BROWSER"
+          node scripts/browser-release-check.mjs --origin "$APP_ORIGIN" --browser "$BROWSER" --output "$RUNNER_TEMP/browser.json"
+          cat "$RUNNER_TEMP/browser.json"
+      - name: Require official database drill PASS
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_ID="tb-$(date +%s%3N)-$(openssl rand -hex 4)"
+          OUT="$RUNNER_TEMP/runs"
+          mkdir -p "$OUT"
+          export BROWSER_EXECUTABLE="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          set +e
+          node scripts/test-battery-runner.mjs --run-id "$RUN_ID" --output-root "$OUT" --origin "$APP_ORIGIN"
+          runner=$?
+          set -e
+          node - "$OUT/$RUN_ID/status.json" <<'NODE'
+          const fs=require('fs');
+          const s=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
+          const m=new Map(s.steps.map(x=>[x.id,x]));
+          for(const id of ['http','browser','database']){
+            const st=m.get(id)?.state||'MISSING';
+            console.log(`${id}=${st}: ${m.get(id)?.message||''}`);
+            if(st!=='PASS') throw new Error(`${id}:${st}`);
+          }
+          NODE
+          echo "runner_exit=$runner"
+      - name: Diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo '--- web ---'; tail -250 "$RUNNER_TEMP/web.log" || true
+          echo '--- worker ---'; tail -250 "$RUNNER_TEMP/worker.log" || true
+          docker logs --tail 250 rc18-direct-db || true
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          test ! -f "$RUNNER_TEMP/web.pid" || kill "$(cat "$RUNNER_TEMP/web.pid")" 2>/dev/null || true
+          test ! -f "$RUNNER_TEMP/worker.pid" || kill "$(cat "$RUNNER_TEMP/worker.pid")" 2>/dev/null || true
+          docker rm -f rc18-direct-db >/dev/null 2>&1 || true

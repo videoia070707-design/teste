@@ -1,0 +1,251 @@
+name: Automation RC18 Linux Runtime + Database Qualification
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - '.github/workflows/automation-rc18-linux-runtime-db.yml'
+      - 'apps/**'
+      - 'packages/**'
+      - 'database/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-browser-database:
+    name: Runtime browser + PostgreSQL recovery drills
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      APP_ORIGIN: http://127.0.0.1:3000
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:55432/automation_local
+      DATABASE_POOL_MAX: '4'
+      LOCAL_TEST_MODE: 'true'
+      LOCAL_TEST_USER_ID: 00000000-0000-4000-8000-000000000001
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: local-test-only
+      GOOGLE_AUTH_ENABLED: 'false'
+      LEGAL_ENTITY_NAME: Automation Platform RC18 Qualification
+      SUPPORT_EMAIL: local-test@example.test
+      INSTAGRAM_GRAPH_BASE_URL: https://graph.instagram.com/
+      INSTAGRAM_GRAPH_API_VERSION: v26.0
+      INSTAGRAM_OAUTH_TOKEN_ENCODING: multipart
+      INSTAGRAM_LONG_LIVED_TOKEN_URL: https://graph.instagram.com/access_token
+      AUTOMATION_WORKER_ID: gha-rc18-qualification
+
+    steps:
+      - name: Checkout qualification branch
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22.16
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.16.0
+
+      - name: Activate pnpm 9.15.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@9.15.4 --activate
+          test "$(pnpm --version)" = "9.15.4"
+
+      - name: Install locked dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Start persistent qualification PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker rm -f automation-platform-local-db >/dev/null 2>&1 || true
+          docker run -d --name automation-platform-local-db \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=automation_local \
+            -p 127.0.0.1:55432:5432 \
+            postgres:17-alpine
+          for i in $(seq 1 60); do
+            if docker exec automation-platform-local-db pg_isready -U postgres -d automation_local >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs automation-platform-local-db
+          exit 1
+
+      - name: Bootstrap local auth roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/bootstrap.sql" <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+            if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
+          end
+          $$;
+          create schema if not exists auth;
+          create table if not exists auth.users (
+            id uuid primary key,
+            email text,
+            created_at timestamptz not null default now()
+          );
+          insert into auth.users (id,email)
+          values ('00000000-0000-4000-8000-000000000001','local-test@example.test')
+          on conflict (id) do nothing;
+          SQL
+          docker cp "$RUNNER_TEMP/bootstrap.sql" automation-platform-local-db:/tmp/bootstrap.sql
+          docker exec automation-platform-local-db psql -U postgres -d automation_local -v ON_ERROR_STOP=1 -f /tmp/bootstrap.sql
+
+      - name: Apply migrations
+        shell: bash
+        run: pnpm --filter @automation/storage-postgres migrate
+
+      - name: Start automation worker and Next.js dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          nohup pnpm --filter @automation/worker-automation start > "$RUNNER_TEMP/automation-worker.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/automation-worker.pid"
+          nohup pnpm --filter @automation/web dev > "$RUNNER_TEMP/web.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/web.pid"
+
+      - name: Wait for runtime readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:3000/api/health/live > "$RUNNER_TEMP/live.json" 2>/dev/null && \
+               curl -fsS http://127.0.0.1:3000/api/health/ready > "$RUNNER_TEMP/ready.json" 2>/dev/null; then
+              cat "$RUNNER_TEMP/live.json"
+              cat "$RUNNER_TEMP/ready.json"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo '--- WEB LOG ---'
+          tail -200 "$RUNNER_TEMP/web.log" || true
+          echo '--- WORKER LOG ---'
+          tail -200 "$RUNNER_TEMP/automation-worker.log" || true
+          exit 1
+
+      - name: Real browser + hydration qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          BROWSER=""
+          for candidate in /usr/bin/google-chrome /usr/bin/google-chrome-stable /usr/bin/chromium /usr/bin/chromium-browser; do
+            if [ -x "$candidate" ]; then BROWSER="$candidate"; break; fi
+          done
+          if [ -z "$BROWSER" ]; then
+            echo 'No supported browser preinstalled on runner'
+            exit 1
+          fi
+          echo "Browser: $BROWSER"
+          node scripts/browser-release-check.mjs \
+            --origin http://127.0.0.1:3000 \
+            --browser "$BROWSER" \
+            --output "$RUNNER_TEMP/rc18-browser-qualification.json" \
+            --screenshot "$RUNNER_TEMP/rc18-browser.png"
+          cat "$RUNNER_TEMP/rc18-browser-qualification.json"
+
+      - name: Run Test Center deep qualification
+        id: battery
+        shell: bash
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          RUN_ID="tb-$(node -e 'process.stdout.write(String(Date.now()))')-$(node -e 'process.stdout.write(require("crypto").randomBytes(4).toString("hex"))')"
+          OUT="$RUNNER_TEMP/rc18-test-center"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "output_root=$OUT" >> "$GITHUB_OUTPUT"
+          node scripts/test-battery-runner.mjs \
+            --run-id "$RUN_ID" \
+            --output-root "$OUT" \
+            --origin http://127.0.0.1:3000
+
+      - name: Require browser and database drill PASS
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.battery.outputs.run_id }}
+          OUTPUT_ROOT: ${{ steps.battery.outputs.output_root }}
+        run: |
+          set -euo pipefail
+          STATUS="$OUTPUT_ROOT/$RUN_ID/status.json"
+          test -f "$STATUS"
+          node - "$STATUS" <<'NODE'
+          const fs = require('fs');
+          const path = process.argv[2];
+          const status = JSON.parse(fs.readFileSync(path, 'utf8'));
+          const byId = new Map((status.steps || []).map((step) => [step.id, step]));
+          for (const id of ['http','browser','database']) {
+            const step = byId.get(id);
+            console.log(id, step?.state, step?.message || '');
+            if (!step || step.state !== 'PASS') process.exitCode = 2;
+          }
+          NODE
+
+      - name: Record Linux qualification evidence
+        if: always()
+        shell: bash
+        env:
+          RUN_ID: ${{ steps.battery.outputs.run_id }}
+          OUTPUT_ROOT: ${{ steps.battery.outputs.output_root }}
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const runId = process.env.RUN_ID || null;
+          const root = process.env.OUTPUT_ROOT || null;
+          let steps = {};
+          if (runId && root) {
+            const statusPath = path.join(root, runId, 'status.json');
+            if (fs.existsSync(statusPath)) {
+              const status = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+              steps = Object.fromEntries((status.steps || []).filter(s => ['http','browser','database'].includes(s.id)).map(s => [s.id, s.state]));
+            }
+          }
+          const evidence = {
+            stage: 'linux-runtime-browser-database',
+            commit: process.env.GITHUB_SHA,
+            runner: process.env.RUNNER_NAME,
+            runId,
+            steps,
+            verifiedAt: new Date().toISOString()
+          };
+          fs.writeFileSync('rc18-linux-runtime-database-evidence.json', JSON.stringify(evidence, null, 2) + '\n');
+          NODE
+
+      - name: Upload runtime/database evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc18-linux-runtime-database-evidence
+          path: |
+            rc18-linux-runtime-database-evidence.json
+            ${{ runner.temp }}/rc18-browser-qualification.json
+            ${{ runner.temp }}/rc18-browser.png
+            ${{ runner.temp }}/web.log
+            ${{ runner.temp }}/automation-worker.log
+            ${{ steps.battery.outputs.output_root }}/${{ steps.battery.outputs.run_id }}/status.json
+            ${{ steps.battery.outputs.output_root }}/${{ steps.battery.outputs.run_id }}/summary.json
+            ${{ steps.battery.outputs.output_root }}/${{ steps.battery.outputs.run_id }}/automation-test-results-${{ steps.battery.outputs.run_id }}.zip
+          if-no-files-found: warn
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/web.pid" ]; then kill "$(cat "$RUNNER_TEMP/web.pid")" 2>/dev/null || true; fi
+          if [ -f "$RUNNER_TEMP/automation-worker.pid" ]; then kill "$(cat "$RUNNER_TEMP/automation-worker.pid")" 2>/dev/null || true; fi
+          docker rm -f automation-platform-local-db >/dev/null 2>&1 || true

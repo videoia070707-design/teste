@@ -1,0 +1,44 @@
+name: RC18 Exact Windows Payload PR
+
+on:
+  pull_request:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - 'qualification/runtime-pr-trigger.txt'
+      - '.github/workflows/rc18-exact-windows-pr.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  powershell-exact:
+    name: Stage 2 - exact RC18 Windows PowerShell
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild verified exact RC18 PowerShell payload
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          $parts = Get-ChildItem -Path 'qualification/windows' -Filter 'rc18-windows.part-*.b64' | Sort-Object Name
+          if ($parts.Count -ne 7) { throw "Expected 7 RC18 PowerShell payload parts, found $($parts.Count)" }
+          $encoded = (($parts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join '') -replace '\s',''
+          $zipPath = Join-Path $env:RUNNER_TEMP 'rc18-windows.zip'
+          [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($encoded))
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = '6ccf59ef0effe295407ac46c47637575da93e3c304938991db8a35fdc4fd5033'
+          if ($hash -ne $expected) { throw "PowerShell payload SHA mismatch: $hash" }
+          $root = Join-Path $env:RUNNER_TEMP 'rc18-windows'
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $root -Force
+          $scripts = @(Get-ChildItem -LiteralPath $root -Filter '*.ps1' -File | Sort-Object Name)
+          if ($scripts.Count -ne 15) { throw "Expected 15 PowerShell scripts, found $($scripts.Count)" }
+          $errors=@()
+          foreach($file in $scripts){
+            $tokens=$null; $parseErrors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$parseErrors) | Out-Null
+            foreach($e in $parseErrors){$errors += "$($file.Name):$($e.Extent.StartLineNumber):$($e.Message)"}
+          }
+          if($errors.Count -gt 0){$errors | ForEach-Object { Write-Error $_ }; exit 1}
+          Write-Host "RC18 exact Windows PowerShell PASS: 15/15; payload=$hash"

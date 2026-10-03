@@ -1,0 +1,104 @@
+name: RC18 PowerShell Qualification
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - '.github/workflows/rc18-powershell-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  powershell-parser:
+    name: RC18 exact PowerShell parser
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout qualification branch
+        uses: actions/checkout@v4
+
+      - name: Reconstruct exact RC18 PowerShell source
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ExpectedArchiveHash = 'a6a35b08224388ba35ef17748d8fd2f58f796b7d9602885275db651e14f35e3b'
+          $ExpectedLedgerHash = '1875f5ab5683c5eddd79d028794515331e693de299db1258d4346e7fbdd3a5d2'
+          $Parts = @(Get-ChildItem -LiteralPath '.\.ci\rc18-powershell-exact' -Filter '*.b64' -File | Sort-Object Name)
+          if ($Parts.Count -ne 5) { throw "Expected 5 RC18 bundle chunks, found $($Parts.Count)" }
+
+          $Diagnostics = @()
+          $ArchiveBytes = New-Object System.IO.MemoryStream
+          foreach ($Part in $Parts) {
+            $Raw = Get-Content -LiteralPath $Part.FullName -Raw
+            $Clean = [regex]::Replace($Raw, '[^A-Za-z0-9+/=]', '')
+            $Removed = $Raw.Length - $Clean.Length
+            $Remainder = $Clean.Length % 4
+            if ($Remainder -eq 1) { throw "Invalid base64 chunk length in $($Part.Name): $($Clean.Length)" }
+            $Padding = 0
+            if ($Remainder -eq 2) { $Clean += '==' ; $Padding = 2 }
+            if ($Remainder -eq 3) { $Clean += '=' ; $Padding = 1 }
+            $Decoded = [Convert]::FromBase64String($Clean)
+            $ArchiveBytes.Write($Decoded, 0, $Decoded.Length)
+            $Diagnostics += "$($Part.Name):raw=$($Raw.Length):clean=$($Clean.Length):removed=$Removed:padding=$Padding:decoded=$($Decoded.Length)"
+          }
+          $Diagnostics | Set-Content -LiteralPath 'powershell-bundle-diagnostics.txt' -Encoding UTF8
+
+          $Archive = Join-Path $PWD 'rc18-powershell-exact.tgz'
+          [IO.File]::WriteAllBytes($Archive, $ArchiveBytes.ToArray())
+          $ArchiveBytes.Dispose()
+          $ActualArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
+          if ($ActualArchiveHash -ne $ExpectedArchiveHash) { throw "RC18 archive hash mismatch: $ActualArchiveHash" }
+
+          $Extract = Join-Path $PWD 'rc18-powershell-exact'
+          New-Item -ItemType Directory -Path $Extract -Force | Out-Null
+          tar -xzf $Archive -C $Extract
+          if ($LASTEXITCODE -ne 0) { throw "tar extraction failed with exit code $LASTEXITCODE" }
+          $ScriptRoot = Join-Path $Extract 'scripts\windows'
+          $Files = @(Get-ChildItem -LiteralPath $ScriptRoot -Filter '*.ps1' -File -Recurse | Sort-Object Name)
+          if ($Files.Count -ne 15) { throw "Expected 15 exact RC18 PowerShell scripts, found $($Files.Count)" }
+
+          $Lines = foreach ($File in $Files) {
+            $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $File.FullName).Hash.ToLowerInvariant()
+            "$Hash  scripts/windows/$($File.Name)"
+          }
+          $Ledger = ($Lines -join "`n") + "`n"
+          [IO.File]::WriteAllText((Join-Path $PWD 'powershell-ledger.txt'), $Ledger, [Text.UTF8Encoding]::new($false))
+          $LedgerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath 'powershell-ledger.txt').Hash.ToLowerInvariant()
+          if ($LedgerHash -ne $ExpectedLedgerHash) { throw "RC18 script ledger mismatch: $LedgerHash" }
+          "archive_sha256=$ActualArchiveHash" | Set-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          "script_count=$($Files.Count)" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          "ledger_sha256=$LedgerHash" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+
+      - name: Parse all RC18 PowerShell scripts with native Windows PowerShell AST
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\rc18-powershell-exact\scripts\windows\Test-PowerShellSyntax.ps1' -DirectoryPath '.\rc18-powershell-exact\scripts\windows'
+          if ($LASTEXITCODE -ne 0) { throw "PowerShell parser failed with exit code $LASTEXITCODE" }
+          'verdict=PASS' | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          "host=$([Environment]::OSVersion.VersionString)" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          "powershell=$($PSVersionTable.PSVersion.ToString())" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+
+      - name: Capture failure evidence
+        if: failure()
+        shell: powershell
+        run: |
+          if (-not (Test-Path -LiteralPath 'powershell-qualification.txt')) {
+            'verdict=FAIL' | Set-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          } else {
+            'verdict=FAIL' | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          }
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc18-powershell-qualification
+          path: |
+            powershell-qualification.txt
+            powershell-ledger.txt
+            powershell-bundle-diagnostics.txt
+          if-no-files-found: error

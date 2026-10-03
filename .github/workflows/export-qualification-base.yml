@@ -1,0 +1,32 @@
+name: Export Qualification Base
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - '.github/workflows/export-qualification-base.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create base snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git --exclude=.ci --exclude='.github/workflows/rc18-direct-qualification.yml' --exclude='.github/workflows/export-qualification-base.yml' -czf "$RUNNER_TEMP/qualification-base.tar.gz" .
+          sha256sum "$RUNNER_TEMP/qualification-base.tar.gz" | tee "$RUNNER_TEMP/qualification-base.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qualification-base
+          path: |
+            ${{ runner.temp }}/qualification-base.tar.gz
+            ${{ runner.temp }}/qualification-base.sha256
+          if-no-files-found: error
+          retention-days: 1

@@ -1,0 +1,35 @@
+name: RC18 Exact Qualification
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - .github/workflows/rc18-qualification.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-powershell:
+    name: Windows PowerShell parser - exact RC18
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rebuild exact RC18 PowerShell payload
+        shell: powershell
+        run: |
+          $parts = Get-ChildItem -Path "qualification/windows" -Filter "rc18-windows.part-*.b64" | Sort-Object Name
+          if ($parts.Count -ne 7) { throw "Expected 7 RC18 PowerShell payload parts, found $($parts.Count)" }
+          $encoded = (($parts | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw }) -join '') -replace '\s',''
+          $zipPath = Join-Path $env:RUNNER_TEMP 'rc18-windows.zip'
+          [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($encoded))
+          $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($hash -ne '6ccf59ef0effe295407ac46c47637575da93e3c304938991db8a35fdc4fd5033') { throw "PowerShell payload SHA mismatch: $hash" }
+          $root = Join-Path $env:RUNNER_TEMP 'rc18-windows'
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $root -Force
+          $scripts = Get-ChildItem -LiteralPath $root -Filter '*.ps1' -File
+          if ($scripts.Count -ne 15) { throw "Expected 15 PowerShell scripts, found $($scripts.Count)" }
+          & (Join-Path $root 'Test-PowerShellSyntax.ps1') -DirectoryPath $root
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

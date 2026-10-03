@@ -1,0 +1,125 @@
+name: Automation RC18 Windows PowerShell Qualification
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - 'scripts/windows/**'
+      - '.github/workflows/automation-rc18-windows-powershell.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  powershell-parser:
+    name: Windows PowerShell 5.1 parser
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify RC18 script set and canonical SHA-256
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = @{
+            'Apply-Local-Upgrade.ps1'       = 'fdf44e93e10e03af99539eda6db51abf9e45a9f8ebdbee7b5b4894865354da29'
+            'Backup-Local-Data.ps1'         = '0c554fab7822ea96f1ed0679e5f738421d813e5bdd65474eea6b86a30b34a4bb'
+            'Prepare-Local-Upgrade.ps1'      = '28d4e0bed86c6cc1afb8652caea035d0ea623e94027816e8ec39d468121ab2f1'
+            'Qualify-Local-Release.ps1'      = '04a45d062c610859ce4a7b947b423f4c3790518dcaaf9a4368e6d716850cee1b'
+            'Repair-Local-Environment.ps1'   = '837f6522952524a408b40e292dcbc97efa970c11b2aac8451fc5e5220c5bda64'
+            'Reset-Local-Runtime.ps1'        = 'eb51b4f8a5f71c19bc6c43d841594150d0f00f8ad7fd98d4573a0a2f704d1111'
+            'Restore-Local-Primary.ps1'      = 'd77ce950cfedf519a78ca722ceb04f36b78e2a01c2c7e32d156e085032fed574'
+            'Rollback-Local-Upgrade.ps1'     = 'd815eee7899eef9295007c44f03a3759469cd82fe5ddccd330f690d18d042303'
+            'Run-Local-Battery.ps1'          = '5d79ca254294fc9072a08e260d605341e5faabf3058fd3cad00f7c1e4d06b0aa'
+            'Start-Local-Runtime.ps1'        = 'f08aebd4a2d95bf688850d1ec3940a7306a6461dedc0b2b504de183e3a3e275c'
+            'Start-Local-Test.ps1'           = 'c844e9ef564ec52d5214fd953e50a7bf32649112d5c1b666657810d5670df718'
+            'Stop-Local-Runtime.ps1'         = '05bbde85d2b1e81d5fdf8b1466e376e89f00524899ede42de6bfa1a69a6d598b'
+            'Stop-Local-Test.ps1'            = 'ad83e6a2f17f4ff98f7d4407a30baff43f07de15db7f66c8ea582c84a3770107'
+            'Test-Local-Restore.ps1'         = '5df0a5e809ce9817efef3a25a60f2cde5a0fd860be002b058493acd316336dd7'
+            'Test-PowerShellSyntax.ps1'      = '598127df816d411c4a87a393f66ea2434d94f05f68d7e0768dcb6d5c2c1139e4'
+          }
+
+          $files = @(Get-ChildItem -LiteralPath 'scripts/windows' -Filter '*.ps1' -File | Sort-Object Name)
+          if ($files.Count -ne $expected.Count) {
+            throw "RC18_POWERSHELL_FILE_COUNT_MISMATCH expected=$($expected.Count) actual=$($files.Count)"
+          }
+
+          foreach ($file in $files) {
+            if (-not $expected.ContainsKey($file.Name)) {
+              throw "RC18_UNEXPECTED_POWERSHELL_FILE:$($file.Name)"
+            }
+
+            # Git on Windows may materialize CRLF. Normalize text back to the
+            # package's canonical LF + UTF-8(no BOM) form before hashing.
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            $canonical = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+            $bytes = New-Object System.Text.UTF8Encoding($false)
+            $payload = $bytes.GetBytes($canonical)
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            try {
+              $actual = -join ($sha256.ComputeHash($payload) | ForEach-Object { $_.ToString('x2') })
+            } finally {
+              $sha256.Dispose()
+            }
+
+            if ($actual -ne $expected[$file.Name]) {
+              throw "RC18_POWERSHELL_SHA256_MISMATCH:$($file.Name):$actual"
+            }
+            Write-Host "[HASH PASS] $($file.Name) $actual"
+          }
+
+      - name: Parse all scripts with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $failed = $false
+          $files = @(Get-ChildItem -LiteralPath 'scripts/windows' -Filter '*.ps1' -File | Sort-Object Name)
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              $file.FullName,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $failed = $true
+              Write-Host "[PARSER FAIL] $($file.Name)" -ForegroundColor Red
+              foreach ($parseError in $errors) {
+                Write-Host "  line $($parseError.Extent.StartLineNumber): $($parseError.Message)" -ForegroundColor Red
+              }
+            } else {
+              Write-Host "[PARSER PASS] $($file.Name)" -ForegroundColor Green
+            }
+          }
+          if ($failed) { exit 2 }
+
+      - name: Run RC18 syntax harness
+        shell: powershell
+        run: |
+          & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File scripts/windows/Test-PowerShellSyntax.ps1 -DirectoryPath scripts/windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Write qualification evidence
+        shell: powershell
+        run: |
+          $evidence = [ordered]@{
+            stage = 'windows-powershell'
+            status = 'PASS'
+            runner = $env:RUNNER_NAME
+            os = [Environment]::OSVersion.VersionString
+            powershell = $PSVersionTable.PSVersion.ToString()
+            scripts = 15
+            rc18PackageSha256 = '61cae1c42ca8177a0f1624637e2ac95ec1088fc50c44ee255964cab82f9d9cdd'
+            commit = $env:GITHUB_SHA
+            verifiedAt = (Get-Date).ToUniversalTime().ToString('o')
+          }
+          $evidence | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath rc18-windows-powershell-evidence.json -Encoding UTF8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rc18-windows-powershell-evidence
+          path: rc18-windows-powershell-evidence.json
+          if-no-files-found: error
