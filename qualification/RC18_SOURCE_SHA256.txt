@@ -1,0 +1,1 @@
+RC18 CI source archive SHA-256 will be verified by the qualification workflow before execution.

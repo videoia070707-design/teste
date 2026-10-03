@@ -1,0 +1,142 @@
+Path $DependencyHashFile) {
+    $recordedHash = ((Get-Content -LiteralPath $DependencyHashFile -ErrorAction SilentlyContinue | Select-Object -First 1) + "").Trim().ToLowerInvariant()
+  }
+
+  if ((-not $ForceInstall) -and (Test-Path -LiteralPath $nodeModulesMarker) -and $recordedHash -eq $lockHash) {
+    Log "Dependencias ja correspondem ao pnpm-lock.yaml; install completo ignorado."
+    return
+  }
+
+  Invoke-External -FilePath "pnpm.cmd" -Arguments @("install", "--frozen-lockfile") -Label "pnpm install --frozen-lockfile"
+  Set-Content -LiteralPath $DependencyHashFile -Value $lockHash -Encoding ASCII
+}
+
+function Ensure-DatabaseContainer {
+  $existing = (& docker.exe ps -a --filter "name=^/$DbContainer$" --format "{{.Names}}") -join ""
+  if ($existing -eq $DbContainer) {
+    $running = (& docker.exe inspect -f "{{.State.Running}}" $DbContainer 2>$null) -join ""
+    if ($running -ne "true") {
+      Invoke-External -FilePath "docker.exe" -Arguments @("start", $DbContainer) -Label "docker start $DbContainer"
+    } else {
+      Log "PostgreSQL local persistente ja esta em execucao."
+    }
+    return
+  }
+
+  Invoke-External -FilePath "docker.exe" -Arguments @("volume", "create", $DbVolume) -Label "docker volume create $DbVolume"
+  Invoke-External -FilePath "docker.exe" -Arguments @(
+    "run", "-d",
+    "--name", $DbContainer,
+    "--restart", "unless-stopped",
+    "-e", "POSTGRES_USER=$DbUser",
+    "-e", "POSTGRES_PASSWORD=$DbPassword",
+    "-e", "POSTGRES_DB=$DbName",
+    "-p", "127.0.0.1:$DbPort`:5432",
+    "-v", "$DbVolume`:/var/lib/postgresql/data",
+    "postgres:17-alpine"
+  ) -Label "docker postgres:17-alpine persistente"
+}
+
+try {
+  Set-Location -LiteralPath $SourceRoot
+  Log "Inicio do runtime local persistente. Nenhum dado local sera apagado por este fluxo."
+
+  $supersededMarker = Join-Path $SourceRoot "SUPERSEDED_BY.json"
+  if ((-not $AllowSuperseded) -and (Test-Path -LiteralPath $supersededMarker)) {
+    Fail "PACKAGE_SUPERSEDED_BY_NEWER_RELEASE. Use o pacote ativo ou REVERTER-ATUALIZACAO-WINDOWS.cmd." 9
+  }
+
+  Log "[1/8] Validando Node, Corepack e Docker..."
+  if (-not (Command-Exists "node.exe")) { Fail "Node.js nao encontrado. Instale Node.js 22 LTS e execute novamente." 10 }
+  if (-not (Command-Exists "corepack.cmd")) { Fail "Corepack nao encontrado na instalacao do Node.js." 11 }
+  if (-not (Command-Exists "docker.exe")) { Fail "Docker Desktop nao encontrado. Instale/abra o Docker Desktop e execute novamente." 12 }
+
+  $nodeVersion = (& node.exe --version).TrimStart("v")
+  $nodeMajor = [int]($nodeVersion.Split(".")[0])
+  if ($nodeMajor -lt 20) { Fail "Node.js 20+ obrigatorio. Detectado: v$nodeVersion" 13 }
+  Log "Node detectado: v$nodeVersion"
+
+  if (-not (Ensure-DockerDaemon)) { Fail "Docker Desktop esta instalado, mas o daemon nao ficou ativo. Abra o Docker Desktop e execute novamente." 14 }
+
+  Log "[2/8] Preparando pnpm e dependencias sem reinstalacao desnecessaria..."
+  Ensure-Pnpm
+  Ensure-Dependencies
+
+  Log "[3/8] Preparando PostgreSQL persistente..."
+  Ensure-DatabaseContainer
+
+  $dbReady = $false
+  for ($attempt = 1; $attempt -le 45; $attempt++) {
+    & docker.exe exec $DbContainer pg_isready -U $DbUser -d $DbName *> $null
+    if ($LASTEXITCODE -eq 0) { $dbReady = $true; break }
+    Start-Sleep -Seconds 1
+  }
+  if (-not $dbReady) { Fail "PostgreSQL local nao ficou pronto em 45 segundos." 20 }
+
+  Log "[4/8] Garantindo Auth local e usuario de desenvolvimento..."
+  $bootstrapSql = Join-Path $WorkDir "bootstrap-local.sql"
+  @"
+do `$`$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+  if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+  if not exists (select 1 from pg_roles where rolname = 'service_role') then create role service_role nologin; end if;
+end
+`$`$;
+create schema if not exists auth;
+create table if not exists auth.users (
+  id uuid primary key,
+  email text,
+  created_at timestamptz not null default now()
+);
+insert into auth.users (id, email)
+values ('$LocalUserId', 'local-test@example.test')
+on conflict (id) do nothing;
+"@ | Set-Content -LiteralPath $bootstrapSql -Encoding UTF8
+
+  Invoke-External -FilePath "docker.exe" -Arguments @("cp", $bootstrapSql, "$DbContainer`:/tmp/bootstrap-local.sql") -Label "docker cp bootstrap"
+  Invoke-External -FilePath "docker.exe" -Arguments @("exec", $DbContainer, "psql", "-U", $DbUser, "-d", $DbName, "-v", "ON_ERROR_STOP=1", "-f", "/tmp/bootstrap-local.sql") -Label "bootstrap auth local"
+
+  Log "[5/8] Aplicando somente migrations pendentes..."
+  $previousDatabaseUrl = $env:DATABASE_URL
+  $env:DATABASE_URL = $DatabaseUrl
+  try {
+    Invoke-External -FilePath "pnpm.cmd" -Arguments @("--filter", "@automation/storage-postgres", "migrate") -Label "migration runner"
+  } finally {
+    if ($null -eq $previousDatabaseUrl) { Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue }
+    else { $env:DATABASE_URL = $previousDatabaseUrl }
+  }
+
+  Log "[6/8] Preparando configuracao efemera de processo sem sobrescrever .env.local..."
+  $webRuntimeEnv = @(
+    "`$env:APP_ORIGIN='$LocalUrl'",
+    "`$env:DATABASE_URL='$DatabaseUrl'",
+    "`$env:DATABASE_POOL_MAX='4'",
+    "`$env:LOCAL_TEST_MODE='true'",
+    "`$env:LOCAL_TEST_USER_ID='$LocalUserId'",
+    "`$env:NEXT_PUBLIC_SUPABASE_URL='http://127.0.0.1:54321'",
+    "`$env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY='local-test-only'",
+    "`$env:GOOGLE_AUTH_ENABLED='false'",
+    "`$env:LEGAL_ENTITY_NAME='Automation Platform Local Runtime'",
+    "`$env:SUPPORT_EMAIL='local-test@example.test'",
+    "`$env:INSTAGRAM_GRAPH_BASE_URL='https://graph.instagram.com/'",
+    "`$env:INSTAGRAM_GRAPH_API_VERSION='v26.0'",
+    "`$env:INSTAGRAM_OAUTH_TOKEN_ENCODING='multipart'",
+    "`$env:INSTAGRAM_LONG_LIVED_TOKEN_URL='https://graph.instagram.com/access_token'"
+  ) -join "; "
+  Log "Configuracao local sera aplicada somente aos processos iniciados por este launcher."
+
+  Log "[7/8] Iniciando worker e dashboard..."
+  Drain-PreviousAutomationWorker -TimeoutSeconds 120
+  Stop-PidFromFile -PidFile $WebPidFile -Label "Web"
+
+  $automationCommand = "Set-Location -LiteralPath '$($SourceRoot.Replace("'", "''"))'; `$env:DATABASE_URL='$DatabaseUrl'; `$env:AUTOMATION_WORKER_ID='$AutomationWorkerId'; pnpm.cmd --filter @automation/worker-automation start *>> '$($AutomationLog.Replace("'", "''"))'"
+  $automationProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @(
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $automationCommand
+  ) -WorkingDirectory $SourceRoot -WindowStyle Hidden -PassThru
+  $StartedAutomationProcessId = $automationProcess.Id
+  Set-Content -LiteralPath $AutomationPidFile -Value $automationProcess.Id -Encoding ASCII
+  Set-Content -LiteralPath $AutomationWorkerIdFile -Value $AutomationWorkerId -Encoding ASCII
+  Log "Automation worker PID: $($automationProcess.Id) / ID: $AutomationWorkerId"
+
+  $webCommand = "Set-Location -LiteralPath '$(

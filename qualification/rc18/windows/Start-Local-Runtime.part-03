@@ -1,0 +1,52 @@
+$SourceRoot.Replace("'", "''"))'; $webRuntimeEnv; pnpm.cmd --filter @automation/web dev *>> '$($WebLog.Replace("'", "''"))'"
+  $webProcess = Start-Process -FilePath "powershell.exe" -ArgumentList @(
+    "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $webCommand
+  ) -WorkingDirectory $SourceRoot -WindowStyle Hidden -PassThru
+  $StartedWebProcessId = $webProcess.Id
+  Set-Content -LiteralPath $WebPidFile -Value $webProcess.Id -Encoding ASCII
+  Log "Web PID: $($webProcess.Id)"
+
+  if (-not (Wait-AutomationWorkerReady -WorkerId $AutomationWorkerId -ProcessId $automationProcess.Id -TimeoutSeconds 60)) {
+    Fail "Automation worker nao publicou heartbeat valido. Consulte AUTOMATION_WORKER.log." 29
+  }
+  Log "Automation worker confirmou heartbeat no PostgreSQL."
+
+  if (-not (Wait-AppHealth -Url "$LocalUrl/api/health/live" -ExpectedStatus "ok" -ExpectedService "web" -TimeoutSeconds 120)) {
+    Fail "Servidor web nao respondeu com a identidade esperada em /api/health/live. Consulte WEB_SERVER.log." 30
+  }
+  if (-not (Wait-AppHealth -Url "$LocalUrl/api/health/ready" -ExpectedStatus "ready" -ExpectedService "web" -TimeoutSeconds 60)) {
+    Fail "Servidor web iniciou, mas /api/health/ready nao ficou pronto. Consulte WEB_SERVER.log." 31
+  }
+  $bootStatus = Wait-LocalRuntimeBootReady -Url "$LocalUrl/api/runtime/local-status?probe=boot" -TimeoutSeconds 30
+  if ($null -eq $bootStatus) {
+    Fail "Runtime abriu, mas o supervisor local nao confirmou worker/banco prontos." 33
+  }
+  if ([string]$bootStatus.status -ne "healthy") {
+    $reasons = @($bootStatus.automationQueue.reasons) -join ", "
+    Log "AVISO: runtime iniciou, mas o SLO operacional esta $($bootStatus.status). A fila permanecera ativa para auto-healing/drain. Motivos: $reasons"
+  } else {
+    Log "Supervisor operacional confirmou SLO healthy."
+  }
+
+  Log "[8/8] Smoke das telas essenciais..."
+  $paths = @("/", "/inbox", "/contacts", "/automations", "/campaigns", "/analytics", "/ai", "/connections", "/reliability", "/testing")
+  foreach ($path in $paths) {
+    if (-not (Wait-Http200 "$LocalUrl$path" 30)) {
+      Fail "Tela local falhou no smoke test: $path" 32
+    }
+    Log "HTTP 200: $path"
+  }
+
+  Write-Result -Status "PASS" -ExitCode 0 -Message "Runtime local ativo com persistencia preservada."
+  Log "RUNTIME LOCAL ATIVO. Dashboard: $LocalUrl"
+  if (-not $NoBrowser) { Start-Process "$LocalUrl/testing" | Out-Null }
+  exit 0
+} catch {
+  $message = $_.Exception.Message
+  Rollback-StartedProcesses
+  if (-not (Test-Path -LiteralPath $ResultJson)) {
+    Write-Result -Status "FAILED" -ExitCode 1 -Message $message
+  }
+  Log "Erro final: $message"
+  exit 1
+}
