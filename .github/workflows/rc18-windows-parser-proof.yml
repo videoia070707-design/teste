@@ -1,0 +1,99 @@
+name: RC18 Windows Parser Proof
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - '.github/workflows/rc18-windows-parser-proof.yml'
+      - 'qualification/windows/**'
+
+permissions:
+  contents: write
+
+jobs:
+  powershell-parser:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout qualification branch
+        uses: actions/checkout@v4
+
+      - name: Decode and parse exact RC18 PowerShell payloads
+        id: parser
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $resultDir = 'qualification/results'
+          New-Item -ItemType Directory -Force -Path $resultDir | Out-Null
+          $decodedDir = Join-Path $env:RUNNER_TEMP 'rc18-powershell'
+          New-Item -ItemType Directory -Force -Path $decodedDir | Out-Null
+
+          $encodedFiles = @(Get-ChildItem 'qualification/windows' -Filter '*.b64' -File | Sort-Object Name)
+          $errors = @()
+          $parsed = 0
+
+          try {
+            if ($encodedFiles.Count -ne 15) {
+              throw "Expected 15 RC18 PowerShell payloads, found $($encodedFiles.Count)."
+            }
+
+            foreach ($encoded in $encodedFiles) {
+              $targetName = $encoded.BaseName
+              if (-not $targetName.EndsWith('.ps1')) {
+                throw "Encoded payload does not map to .ps1: $($encoded.Name)"
+              }
+              $target = Join-Path $decodedDir $targetName
+              $raw = (Get-Content -LiteralPath $encoded.FullName -Raw).Trim()
+              [IO.File]::WriteAllBytes($target, [Convert]::FromBase64String($raw))
+
+              $tokens = $null
+              $parseErrors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile($target, [ref]$tokens, [ref]$parseErrors) | Out-Null
+              if ($parseErrors.Count -gt 0) {
+                foreach ($parseError in $parseErrors) {
+                  $errors += "${targetName}: $($parseError.Message)"
+                }
+              }
+              $parsed += 1
+            }
+          } catch {
+            $errors += $_.Exception.Message
+          }
+
+          $status = if ($errors.Count -eq 0 -and $parsed -eq 15) { 'PASS' } else { 'FAIL' }
+          $evidence = [ordered]@{
+            schemaVersion = 1
+            stage = 'windows-powershell'
+            status = $status
+            parsedFiles = $parsed
+            expectedFiles = 15
+            sourceCommit = '${{ github.sha }}'
+            runner = '${{ runner.os }}'
+            generatedAt = (Get-Date).ToUniversalTime().ToString('o')
+            errors = @($errors)
+          }
+          $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath "$resultDir/windows-powershell.json" -Encoding UTF8
+          Get-Content -LiteralPath "$resultDir/windows-powershell.json"
+
+          if ($status -ne 'PASS') {
+            exit 1
+          }
+
+      - name: Publish parser evidence to qualification branch
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path 'qualification/results/windows-powershell.json')) {
+            throw 'Parser evidence was not generated.'
+          }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add qualification/results/windows-powershell.json
+          $pending = git status --porcelain -- qualification/results/windows-powershell.json
+          if ($pending) {
+            git commit -m 'ci: publish RC18 Windows parser evidence [skip ci]'
+            git push origin HEAD:automation-platform-rc18-qualification
+          } else {
+            Write-Host 'Evidence unchanged; nothing to commit.'
+          }
