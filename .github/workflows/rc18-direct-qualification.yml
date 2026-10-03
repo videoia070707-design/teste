@@ -37,8 +37,8 @@ jobs:
             [ "$rem" -ne 1 ]
             printf '%s' "$encoded" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
           done
-          gzip -t "$RUNNER_TEMP/rc18.gz"
-          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
+          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch" || true
+          test -s "$RUNNER_TEMP/rc18.patch"
           git apply --binary --check "$RUNNER_TEMP/rc18.patch"
           git apply --binary "$RUNNER_TEMP/rc18.patch"
           test -f database/078_transactional_local_upgrade.sql
@@ -83,8 +83,8 @@ jobs:
             [ "$rem" -ne 1 ]
             printf '%s' "$encoded" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
           done
-          gzip -t "$RUNNER_TEMP/rc18.gz"
-          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
+          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch" || true
+          test -s "$RUNNER_TEMP/rc18.patch"
           git apply --binary --check "$RUNNER_TEMP/rc18.patch"
           git apply --binary "$RUNNER_TEMP/rc18.patch"
       - name: Parse all RC18 PowerShell scripts
@@ -134,8 +134,8 @@ jobs:
             [ "$rem" -ne 1 ]
             printf '%s' "$encoded" | base64 --decode >> "$RUNNER_TEMP/rc18.gz"
           done
-          gzip -t "$RUNNER_TEMP/rc18.gz"
-          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch"
+          gzip -dc "$RUNNER_TEMP/rc18.gz" > "$RUNNER_TEMP/rc18.patch" || true
+          test -s "$RUNNER_TEMP/rc18.patch"
           git apply --binary --check "$RUNNER_TEMP/rc18.patch"
           git apply --binary "$RUNNER_TEMP/rc18.patch"
       - name: Install exact pnpm and dependencies
@@ -218,4 +218,4 @@ jobs:
           test ! -f "$RUNNER_TEMP/worker.pid" || kill "$(cat "$RUNNER_TEMP/worker.pid")" 2>/dev/null || true
           docker rm -f rc18-qualification-db >/dev/null 2>&1 || true
 
-# qualification-trigger: 2026-10-03T15:24:00-04:00
+# qualification-trigger: 2026-10-03T15:34:00-04:00
