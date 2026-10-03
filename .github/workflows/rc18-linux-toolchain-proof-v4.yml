@@ -1,4 +1,4 @@
-name: RC18 Linux Toolchain Proof V5
+name: RC18 Linux Toolchain Proof V6
 
 on:
   push:
@@ -29,7 +29,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22.16.0'
-          cache: 'pnpm'
 
       - name: Qualify RC18 source directly
         shell: bash
@@ -56,7 +55,7 @@ jobs:
           const fs=require('fs'),n=k=>Number(process.env[k]||99),tail=(f,m=12000)=>{try{const s=fs.readFileSync(f,'utf8');return s.length>m?s.slice(-m):s}catch{return ''}};
           const checks={corepackEnable:n('COREPACK_ENABLE'),corepackPrepare:n('COREPACK_PREPARE'),pnpmVersion:n('PNPM_VERSION_EXIT'),install:n('INSTALL_EXIT'),typecheck:n('TYPECHECK_EXIT'),test:n('TEST_EXIT'),build:n('BUILD_EXIT')};
           const status=Object.values(checks).every(v=>v===0)?'PASS':'FAIL';
-          const e={schemaVersion:6,stage:'toolchain-dependencies',status,node:process.version,sourceCommit:process.env.SOURCE_COMMIT,runner:'Linux',generatedAt:new Date().toISOString(),checks,tails:{corepackEnable:tail('/tmp/corepack-enable.log',2500),corepackPrepare:tail('/tmp/corepack-prepare.log',2500),pnpmVersion:tail('/tmp/pnpm-version.log',1000),install:tail('/tmp/pnpm-install.log'),typecheck:tail('/tmp/pnpm-typecheck.log'),test:tail('/tmp/pnpm-test.log'),build:tail('/tmp/pnpm-build.log')}};
+          const e={schemaVersion:7,stage:'toolchain-dependencies',status,node:process.version,sourceCommit:process.env.SOURCE_COMMIT,runner:'Linux',generatedAt:new Date().toISOString(),checks,tails:{corepackEnable:tail('/tmp/corepack-enable.log',2500),corepackPrepare:tail('/tmp/corepack-prepare.log',2500),pnpmVersion:tail('/tmp/pnpm-version.log',1000),install:tail('/tmp/pnpm-install.log'),typecheck:tail('/tmp/pnpm-typecheck.log'),test:tail('/tmp/pnpm-test.log'),build:tail('/tmp/pnpm-build.log')}};
           fs.writeFileSync('qualification/results/linux-toolchain.json',JSON.stringify(e,null,2)+'\n');console.log(JSON.stringify(e,null,2));if(status!=='PASS')process.exitCode=1;
           NODE
 
@@ -70,6 +69,6 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -f qualification/results/linux-toolchain.json
           if ! git diff --cached --quiet -- qualification/results/linux-toolchain.json; then
-            git commit -m 'ci: publish RC18 Linux toolchain evidence v5 [skip ci]'
+            git commit -m 'ci: publish RC18 Linux toolchain evidence v6 [skip ci]'
             git push origin HEAD:automation-platform-rc18-qualification
           fi
