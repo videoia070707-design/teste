@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify RC18 script set and SHA-256
+      - name: Verify RC18 script set and canonical SHA-256
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
@@ -50,7 +50,20 @@ jobs:
             if (-not $expected.ContainsKey($file.Name)) {
               throw "RC18_UNEXPECTED_POWERSHELL_FILE:$($file.Name)"
             }
-            $actual = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+
+            # Git on Windows may materialize CRLF. Normalize text back to the
+            # package's canonical LF + UTF-8(no BOM) form before hashing.
+            $text = [System.IO.File]::ReadAllText($file.FullName)
+            $canonical = $text.Replace("`r`n", "`n").Replace("`r", "`n")
+            $bytes = New-Object System.Text.UTF8Encoding($false)
+            $payload = $bytes.GetBytes($canonical)
+            $sha256 = [System.Security.Cryptography.SHA256]::Create()
+            try {
+              $actual = -join ($sha256.ComputeHash($payload) | ForEach-Object { $_.ToString('x2') })
+            } finally {
+              $sha256.Dispose()
+            }
+
             if ($actual -ne $expected[$file.Name]) {
               throw "RC18_POWERSHELL_SHA256_MISMATCH:$($file.Name):$actual"
             }
@@ -110,5 +123,3 @@ jobs:
           name: rc18-windows-powershell-evidence
           path: rc18-windows-powershell-evidence.json
           if-no-files-found: error
-
-# qualification retrigger: 2026-10-03
