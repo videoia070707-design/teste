@@ -1,0 +1,126 @@
+name: RC18 Canonical ZIP Toolchain
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - '.github/workflows/rc18-canonical-zip-toolchain.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    name: Exact final RC18 install typecheck test build
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: automation-platform-rc18-qualification
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+
+      - name: Rebuild exact delivered RC18 ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f qualification/rc18/rc18.part-000.b64
+          test -f qualification/rc18/rc18.part-001.b64
+          test -f qualification/rc18/rc18.part-002.b64
+          test -f qualification/rc18/rc18.part-003.b64
+          cat qualification/rc18/rc18.part-000.b64 \
+              qualification/rc18/rc18.part-001.b64 \
+              qualification/rc18/rc18.part-002.b64 \
+              qualification/rc18/rc18.part-003.b64 \
+            | tr -d '\r\n\t ' | base64 --decode > "$RUNNER_TEMP/rc18-final.zip"
+          echo '61cae1c42ca8177a0f1624637e2ac95ec1088fc50c44ee255964cab82f9d9cdd  '"$RUNNER_TEMP/rc18-final.zip" | sha256sum -c -
+          unzip -t "$RUNNER_TEMP/rc18-final.zip"
+          rm -rf "$RUNNER_TEMP/rc18-final"
+          mkdir -p "$RUNNER_TEMP/rc18-final"
+          unzip -q "$RUNNER_TEMP/rc18-final.zip" -d "$RUNNER_TEMP/rc18-final"
+          root="$(find "$RUNNER_TEMP/rc18-final" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          test -n "$root"
+          printf '%s\n' "$root" > "$RUNNER_TEMP/rc18-root.txt"
+          cd "$root"
+          echo 'ca1791e5d8937b7d3115d4cbc18b09215524e27b31639973d35b4f63e6af884c  package.json' | sha256sum -c -
+          echo 'be2008d51a26811740d2f4703553cb7bae69dc4555c6e48a542671496ca48662  pnpm-lock.yaml' | sha256sum -c -
+          echo '16458af549e4e79edc91ffa436ad6f5ab45343b28a44559a636e0515a6e3848f  database/078_transactional_local_upgrade.sql' | sha256sum -c -
+          test -f scripts/automation-closure-stage-tracker-check.mjs
+          test -f apps/worker-automation/package.json
+          count="$(find apps packages -mindepth 2 -maxdepth 2 -name package.json -type f | wc -l | tr -d ' ')"
+          test "$count" = '14'
+          echo "Canonical RC18 ZIP verified; workspace package count=$count"
+
+      - name: Activate pnpm 9.15.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare pnpm@9.15.4 --activate
+          test "$(pnpm --version)" = '9.15.4'
+
+      - name: Install frozen dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$(cat "$RUNNER_TEMP/rc18-root.txt")"
+          pnpm install --frozen-lockfile
+
+      - name: Typecheck all workspaces
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$(cat "$RUNNER_TEMP/rc18-root.txt")"
+          pnpm typecheck
+
+      - name: Run automated tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$(cat "$RUNNER_TEMP/rc18-root.txt")"
+          pnpm test
+
+      - name: Production build
+        shell: bash
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: |
+          set -euo pipefail
+          cd "$(cat "$RUNNER_TEMP/rc18-root.txt")"
+          pnpm build
+
+      - name: Write qualification evidence
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p qualification-results
+          node_version="$(node --version 2>/dev/null || true)"
+          pnpm_version="$(pnpm --version 2>/dev/null || true)"
+          cat > qualification-results/rc18-canonical-toolchain.json <<JSON
+          {
+            "schemaVersion": 1,
+            "stage": "toolchain-dependencies",
+            "exactDeliveredRc18": true,
+            "zipSha256": "61cae1c42ca8177a0f1624637e2ac95ec1088fc50c44ee255964cab82f9d9cdd",
+            "packageSha256": "ca1791e5d8937b7d3115d4cbc18b09215524e27b31639973d35b4f63e6af884c",
+            "lockSha256": "be2008d51a26811740d2f4703553cb7bae69dc4555c6e48a542671496ca48662",
+            "migration078Sha256": "16458af549e4e79edc91ffa436ad6f5ab45343b28a44559a636e0515a6e3848f",
+            "node": "$node_version",
+            "pnpm": "$pnpm_version",
+            "sourceCommit": "$GITHUB_SHA",
+            "runner": "$RUNNER_NAME",
+            "generatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          JSON
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rc18-canonical-toolchain-evidence
+          path: qualification-results/rc18-canonical-toolchain.json
+          if-no-files-found: error
