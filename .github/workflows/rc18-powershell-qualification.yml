@@ -5,7 +5,6 @@ on:
     branches:
       - automation-platform-rc18-qualification
     paths:
-      - 'scripts/windows/**'
       - '.github/workflows/rc18-powershell-qualification.yml'
   workflow_dispatch:
 
@@ -21,28 +20,43 @@ jobs:
       - name: Checkout qualification branch
         uses: actions/checkout@v4
 
-      - name: Inventory exact RC18 PowerShell scripts
+      - name: Reconstruct exact RC18 PowerShell source
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $Files = @(Get-ChildItem -LiteralPath '.\scripts\windows' -Filter '*.ps1' -File -Recurse | Sort-Object FullName)
-          if ($Files.Count -ne 15) { throw "Expected 15 RC18 PowerShell scripts, found $($Files.Count)" }
+          $ExpectedArchiveHash = '70d38d557f6e0bdc6520436f665e97bb48f581616c8e0ee332c7450192171e55'
+          $Parts = @(Get-ChildItem -LiteralPath '.\.ci\rc18-powershell-exact' -Filter '*.b64' -File | Sort-Object Name)
+          if ($Parts.Count -ne 5) { throw "Expected 5 RC18 bundle chunks, found $($Parts.Count)" }
+          $Base64 = ''
+          foreach ($Part in $Parts) { $Base64 += (Get-Content -LiteralPath $Part.FullName -Raw).Trim() }
+          $Archive = Join-Path $PWD 'rc18-powershell-exact.tgz'
+          [IO.File]::WriteAllBytes($Archive, [Convert]::FromBase64String($Base64))
+          $ActualArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
+          if ($ActualArchiveHash -ne $ExpectedArchiveHash) { throw "Exact RC18 archive hash mismatch: $ActualArchiveHash" }
+          $Extract = Join-Path $PWD 'rc18-powershell-exact'
+          New-Item -ItemType Directory -Path $Extract -Force | Out-Null
+          tar -xzf $Archive -C $Extract
+          if ($LASTEXITCODE -ne 0) { throw "tar extraction failed with exit code $LASTEXITCODE" }
+          $ScriptRoot = Join-Path $Extract 'scripts\windows'
+          $Files = @(Get-ChildItem -LiteralPath $ScriptRoot -Filter '*.ps1' -File -Recurse | Sort-Object FullName)
+          if ($Files.Count -ne 15) { throw "Expected 15 exact RC18 PowerShell scripts, found $($Files.Count)" }
           $Lines = foreach ($File in $Files) {
             $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $File.FullName).Hash.ToLowerInvariant()
-            $Relative = $File.FullName.Substring($PWD.Path.Length + 1).Replace('\\','/')
+            $Relative = $File.FullName.Substring($Extract.Length + 1).Replace('\\','/')
             "$Hash  $Relative"
           }
           $Ledger = ($Lines -join "`n") + "`n"
           [IO.File]::WriteAllText((Join-Path $PWD 'powershell-ledger.txt'), $Ledger, [Text.UTF8Encoding]::new($false))
           $LedgerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath 'powershell-ledger.txt').Hash.ToLowerInvariant()
-          "script_count=$($Files.Count)" | Set-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          "archive_sha256=$ActualArchiveHash" | Set-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          "script_count=$($Files.Count)" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
           "ledger_sha256=$LedgerHash" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
 
       - name: Parse all RC18 PowerShell scripts with native Windows PowerShell AST
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\scripts\windows\Test-PowerShellSyntax.ps1' -DirectoryPath '.\scripts\windows'
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\rc18-powershell-exact\scripts\windows\Test-PowerShellSyntax.ps1' -DirectoryPath '.\rc18-powershell-exact\scripts\windows'
           if ($LASTEXITCODE -ne 0) { throw "PowerShell parser failed with exit code $LASTEXITCODE" }
           'verdict=PASS' | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
           "host=$([Environment]::OSVersion.VersionString)" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
