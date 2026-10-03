@@ -199,3 +199,5 @@ jobs:
           test ! -f "$RUNNER_TEMP/web.pid" || kill "$(cat "$RUNNER_TEMP/web.pid")" 2>/dev/null || true
           test ! -f "$RUNNER_TEMP/worker.pid" || kill "$(cat "$RUNNER_TEMP/worker.pid")" 2>/dev/null || true
           docker rm -f rc18-qualification-db >/dev/null 2>&1 || true
+
+# qualification-trigger: 2026-10-03T15:00:00-04:00
