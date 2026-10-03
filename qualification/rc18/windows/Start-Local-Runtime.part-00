@@ -203,5 +203,4 @@ function Rollback-StartedProcesses {
   Stop-ProcessTree -ProcessId $StartedAutomationProcessId -Label "Automation worker desta tentativa"
   Remove-Item -LiteralPath $WebPidFile -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath $AutomationPidFile -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath $AutomationWorkerIdFile -Force -ErrorAction SilentlyContinue
-}
+  Remove-
