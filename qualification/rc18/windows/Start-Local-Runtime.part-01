@@ -139,4 +139,4 @@ function Ensure-Dependencies {
   $nodeModulesMarker = Join-Path $SourceRoot "node_modules\.modules.yaml"
   $lockHash = (Get-FileHash -LiteralPath $lockFile -Algorithm SHA256).Hash.ToLowerInvariant()
   $recordedHash = ""
-  if (Test-Path -LiteralPath $DependencyHashFile) {
+  if (Test-Path -Literal
