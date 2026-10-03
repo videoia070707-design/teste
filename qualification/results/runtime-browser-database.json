@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "stage": "runtime-browser-database",
+  "status": "FAIL",
+  "runId": null,
+  "generatedAt": "2026-10-03T15:12:11.026Z",
+  "checks": {},
+  "error": "ENOENT: no such file or directory, open '//status.json'"
+}
