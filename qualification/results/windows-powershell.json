@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "stage": "windows-powershell",
+  "status": "FAIL",
+  "parsedFiles": 0,
+  "expectedFiles": 15,
+  "sourceCommit": "117243d45ebe7ea7f7d546dcaeb2f5c69ec57055",
+  "runner": "Windows",
+  "generatedAt": "2026-10-03T01:43:26.9930042Z",
+  "errors": [
+    "Expected 15 RC18 PowerShell payloads, found 7."
+  ]
+}
