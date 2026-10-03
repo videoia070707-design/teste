@@ -1,9 +1,6 @@
 name: RC18 Source Snapshot
 
 on:
-  push:
-    branches:
-      - automation-platform-rc18-qualification
   workflow_dispatch:
 
 jobs:
