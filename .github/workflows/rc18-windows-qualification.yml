@@ -21,27 +21,22 @@ jobs:
       - name: Checkout qualification branch
         uses: actions/checkout@v4
 
-      - name: Reconstruct exact Start-Local-Runtime.ps1
-        shell: powershell
+      - name: Reconstruct exact Start-Local-Runtime.ps1 from Git blobs
+        shell: bash
         run: |
-          $root = Join-Path $env:GITHUB_WORKSPACE 'qualification\rc18\windows'
-          $parts = Get-ChildItem -LiteralPath $root -Filter 'Start-Local-Runtime.part-*' -File | Sort-Object Name
-          if ($parts.Count -ne 4) { throw "START_RUNTIME_PART_COUNT_MISMATCH:$($parts.Count)" }
-          $target = Join-Path $root 'Start-Local-Runtime.ps1'
-          $stream = [IO.File]::Open($target, [IO.FileMode]::Create, [IO.FileAccess]::Write)
-          try {
-            foreach ($part in $parts) {
-              $bytes = [IO.File]::ReadAllBytes($part.FullName)
-              $stream.Write($bytes, 0, $bytes.Length)
-            }
-          } finally {
-            $stream.Dispose()
-          }
-          $hash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($hash -ne 'f08aebd4a2d95bf688850d1ec3940a7306a6461dedc0b2b504de183e3a3e275c') {
-            throw "START_RUNTIME_SHA_MISMATCH:$hash"
-          }
-          Write-Host "START_RUNTIME_SHA_PASS:$hash"
+          set -euo pipefail
+          root='qualification/rc18/windows'
+          target="$root/Start-Local-Runtime.ps1"
+          : > "$target"
+          for suffix in 00 01 02 03; do
+            git cat-file blob "HEAD:$root/Start-Local-Runtime.part-$suffix" >> "$target"
+          done
+          hash="$(sha256sum "$target" | awk '{print $1}')"
+          if [ "$hash" != 'f08aebd4a2d95bf688850d1ec3940a7306a6461dedc0b2b504de183e3a3e275c' ]; then
+            echo "START_RUNTIME_SHA_MISMATCH:$hash" >&2
+            exit 2
+          fi
+          echo "START_RUNTIME_SHA_PASS:$hash"
 
       - name: Parse every exact RC18 PowerShell script
         shell: powershell
