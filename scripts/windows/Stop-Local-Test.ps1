@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = "SilentlyContinue"
 $StateDir = Join-Path $SourceRoot ".local-test"
 $WebPidFile = Join-Path $StateDir "web.pid"
+$AutomationPidFile = Join-Path $StateDir "automation-worker.pid"
 $DbContainer = "automation-platform-local-db"
 $EnvFile = Join-Path $SourceRoot "apps\web\.env.local"
 
@@ -19,6 +20,14 @@ if (Test-Path -LiteralPath $WebPidFile) {
   }
 }
 
+if (Test-Path -LiteralPath $AutomationPidFile) {
+  $automationPid = Get-Content -LiteralPath $AutomationPidFile | Select-Object -First 1
+  if ($automationPid -match '^\d+$') {
+    & taskkill.exe /PID $automationPid /T /F *> $null
+    Write-Host "Automation worker encerrado (PID $automationPid)."
+  }
+}
+
 $existing = (& docker.exe ps -a --filter "name=^/$DbContainer$" --format "{{.Names}}" 2>$null) -join ""
 if ($existing -eq $DbContainer) {
   & docker.exe rm -f $DbContainer *> $null
@@ -26,6 +35,7 @@ if ($existing -eq $DbContainer) {
 }
 
 Remove-Item -LiteralPath $WebPidFile -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $AutomationPidFile -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $EnvFile -Force -ErrorAction SilentlyContinue
 
 Write-Host "Ambiente local encerrado."
