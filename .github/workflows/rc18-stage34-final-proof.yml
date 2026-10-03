@@ -168,3 +168,5 @@ jobs:
           test ! -f "$RUNNER_TEMP/web.pid" || kill "$(cat "$RUNNER_TEMP/web.pid")" 2>/dev/null || true
           test ! -f "$RUNNER_TEMP/worker.pid" || kill "$(cat "$RUNNER_TEMP/worker.pid")" 2>/dev/null || true
           docker rm -f rc18-stage34-db >/dev/null 2>&1 || true
+
+# retrigger correct per-part decode proof 2026-10-03T18:22-04:00
