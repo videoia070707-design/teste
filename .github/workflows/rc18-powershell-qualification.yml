@@ -27,12 +27,25 @@ jobs:
           $ExpectedArchiveHash = '70d38d557f6e0bdc6520436f665e97bb48f581616c8e0ee332c7450192171e55'
           $Parts = @(Get-ChildItem -LiteralPath '.\.ci\rc18-powershell-exact' -Filter '*.b64' -File | Sort-Object Name)
           if ($Parts.Count -ne 5) { throw "Expected 5 RC18 bundle chunks, found $($Parts.Count)" }
-          $Base64 = ''
-          foreach ($Part in $Parts) { $Base64 += (Get-Content -LiteralPath $Part.FullName -Raw).Trim() }
+
+          $Builder = [Text.StringBuilder]::new()
+          $Diagnostics = @()
+          foreach ($Part in $Parts) {
+            $Raw = Get-Content -LiteralPath $Part.FullName -Raw
+            $Clean = [regex]::Replace($Raw, '[^A-Za-z0-9+/=]', '')
+            $Removed = $Raw.Length - $Clean.Length
+            $Diagnostics += "$($Part.Name):raw=$($Raw.Length):clean=$($Clean.Length):removed=$Removed"
+            [void]$Builder.Append($Clean)
+          }
+          $Base64 = $Builder.ToString()
+          $Diagnostics | Set-Content -LiteralPath 'powershell-bundle-diagnostics.txt' -Encoding UTF8
+          if (($Base64.Length % 4) -ne 0) { throw "Sanitized base64 length is not divisible by 4: $($Base64.Length)" }
+
           $Archive = Join-Path $PWD 'rc18-powershell-exact.tgz'
           [IO.File]::WriteAllBytes($Archive, [Convert]::FromBase64String($Base64))
           $ActualArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
           if ($ActualArchiveHash -ne $ExpectedArchiveHash) { throw "Exact RC18 archive hash mismatch: $ActualArchiveHash" }
+
           $Extract = Join-Path $PWD 'rc18-powershell-exact'
           New-Item -ItemType Directory -Path $Extract -Force | Out-Null
           tar -xzf $Archive -C $Extract
@@ -40,6 +53,7 @@ jobs:
           $ScriptRoot = Join-Path $Extract 'scripts\windows'
           $Files = @(Get-ChildItem -LiteralPath $ScriptRoot -Filter '*.ps1' -File -Recurse | Sort-Object FullName)
           if ($Files.Count -ne 15) { throw "Expected 15 exact RC18 PowerShell scripts, found $($Files.Count)" }
+
           $Lines = foreach ($File in $Files) {
             $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $File.FullName).Hash.ToLowerInvariant()
             $Relative = $File.FullName.Substring($Extract.Length + 1).Replace('\\','/')
@@ -80,4 +94,5 @@ jobs:
           path: |
             powershell-qualification.txt
             powershell-ledger.txt
+            powershell-bundle-diagnostics.txt
           if-no-files-found: error
