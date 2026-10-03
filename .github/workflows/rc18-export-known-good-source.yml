@@ -1,0 +1,37 @@
+name: RC18 Export Known Good Source
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-runtime-proof-stable
+    paths:
+      - '.github/workflows/rc18-export-known-good-source.yml'
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: automation-platform-rc18-runtime-proof-stable
+      - name: Verify source
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f package.json
+          test -f pnpm-lock.yaml
+          test -d apps
+          test -d packages
+      - name: Pack source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git --exclude=node_modules --exclude=.next --exclude=qualification/results --exclude=.ci -czf "$RUNNER_TEMP/source.tar.gz" .
+          sha256sum "$RUNNER_TEMP/source.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rc18-known-good-source
+          path: ${{ runner.temp }}/source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
