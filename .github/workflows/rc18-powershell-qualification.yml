@@ -28,24 +28,26 @@ jobs:
           $Parts = @(Get-ChildItem -LiteralPath '.\.ci\rc18-powershell-exact' -Filter '*.b64' -File | Sort-Object Name)
           if ($Parts.Count -ne 5) { throw "Expected 5 RC18 bundle chunks, found $($Parts.Count)" }
 
-          $Builder = [Text.StringBuilder]::new()
           $Diagnostics = @()
+          $ArchiveBytes = New-Object System.IO.MemoryStream
           foreach ($Part in $Parts) {
             $Raw = Get-Content -LiteralPath $Part.FullName -Raw
             $Clean = [regex]::Replace($Raw, '[^A-Za-z0-9+/=]', '')
             $Removed = $Raw.Length - $Clean.Length
-            $Diagnostics += "$($Part.Name):raw=$($Raw.Length):clean=$($Clean.Length):removed=$Removed"
-            [void]$Builder.Append($Clean)
+            $Remainder = $Clean.Length % 4
+            if ($Remainder -eq 1) { throw "Invalid base64 chunk length in $($Part.Name): $($Clean.Length)" }
+            $Padding = 0
+            if ($Remainder -eq 2) { $Clean += '==' ; $Padding = 2 }
+            if ($Remainder -eq 3) { $Clean += '=' ; $Padding = 1 }
+            $Decoded = [Convert]::FromBase64String($Clean)
+            $ArchiveBytes.Write($Decoded, 0, $Decoded.Length)
+            $Diagnostics += "$($Part.Name):raw=$($Raw.Length):clean=$($Clean.Length):removed=$Removed:padding=$Padding:decoded=$($Decoded.Length)"
           }
-          $Base64 = $Builder.ToString()
-          $Remainder = $Base64.Length % 4
-          if ($Remainder -eq 1) { throw "Invalid sanitized base64 length: $($Base64.Length)" }
-          if ($Remainder -eq 2) { $Base64 += '==' ; $Diagnostics += 'padding_added=2' }
-          if ($Remainder -eq 3) { $Base64 += '=' ; $Diagnostics += 'padding_added=1' }
           $Diagnostics | Set-Content -LiteralPath 'powershell-bundle-diagnostics.txt' -Encoding UTF8
 
           $Archive = Join-Path $PWD 'rc18-powershell-exact.tgz'
-          [IO.File]::WriteAllBytes($Archive, [Convert]::FromBase64String($Base64))
+          [IO.File]::WriteAllBytes($Archive, $ArchiveBytes.ToArray())
+          $ArchiveBytes.Dispose()
           $ActualArchiveHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Archive).Hash.ToLowerInvariant()
           if ($ActualArchiveHash -ne $ExpectedArchiveHash) { throw "Exact RC18 archive hash mismatch: $ActualArchiveHash" }
 
