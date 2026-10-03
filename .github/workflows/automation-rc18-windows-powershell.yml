@@ -110,3 +110,5 @@ jobs:
           name: rc18-windows-powershell-evidence
           path: rc18-windows-powershell-evidence.json
           if-no-files-found: error
+
+# qualification retrigger: 2026-10-03
