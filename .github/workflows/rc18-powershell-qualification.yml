@@ -38,8 +38,11 @@ jobs:
             [void]$Builder.Append($Clean)
           }
           $Base64 = $Builder.ToString()
+          $Remainder = $Base64.Length % 4
+          if ($Remainder -eq 1) { throw "Invalid sanitized base64 length: $($Base64.Length)" }
+          if ($Remainder -eq 2) { $Base64 += '==' ; $Diagnostics += 'padding_added=2' }
+          if ($Remainder -eq 3) { $Base64 += '=' ; $Diagnostics += 'padding_added=1' }
           $Diagnostics | Set-Content -LiteralPath 'powershell-bundle-diagnostics.txt' -Encoding UTF8
-          if (($Base64.Length % 4) -ne 0) { throw "Sanitized base64 length is not divisible by 4: $($Base64.Length)" }
 
           $Archive = Join-Path $PWD 'rc18-powershell-exact.tgz'
           [IO.File]::WriteAllBytes($Archive, [Convert]::FromBase64String($Base64))
