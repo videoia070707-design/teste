@@ -1,0 +1,48 @@
+name: RC18 Base Source Artifact
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - '.github/workflows/rc18-base-source-artifact.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    name: Export qualification branch source
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout qualification branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Create deterministic source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/snapshot"
+          tar \
+            --exclude='.git' \
+            --exclude='.ci' \
+            --exclude='qualification' \
+            --exclude='node_modules' \
+            --exclude='.next' \
+            --exclude='runtime' \
+            --exclude='*.log' \
+            -czf "$RUNNER_TEMP/snapshot/base-source.tgz" .
+          sha256sum "$RUNNER_TEMP/snapshot/base-source.tgz" | tee "$RUNNER_TEMP/snapshot/base-source.sha256"
+          git rev-parse HEAD | tee "$RUNNER_TEMP/snapshot/source-commit.txt"
+
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc18-base-source
+          path: ${{ runner.temp }}/snapshot/
+          if-no-files-found: error
+          retention-days: 1
