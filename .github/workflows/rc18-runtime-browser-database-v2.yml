@@ -140,3 +140,5 @@ jobs:
           test ! -f "$RUNNER_TEMP/web.pid" || kill "$(cat "$RUNNER_TEMP/web.pid")" 2>/dev/null || true
           test ! -f "$RUNNER_TEMP/worker.pid" || kill "$(cat "$RUNNER_TEMP/worker.pid")" 2>/dev/null || true
           docker rm -f rc18-exact-db >/dev/null 2>&1 || true
+
+# retrigger exact RC18 runtime/browser/database qualification 2026-10-03T18:15-04:00
