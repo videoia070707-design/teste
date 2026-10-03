@@ -1,4 +1,4 @@
-name: RC18 Windows Parser Proof
+name: RC18 Windows Exact Parser Proof
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - automation-platform-rc18-qualification
     paths:
       - '.github/workflows/rc18-windows-parser-proof.yml'
-      - 'qualification/windows/**'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -14,90 +14,54 @@ permissions:
 jobs:
   powershell-parser:
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
-      - name: Checkout qualification branch
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: automation-platform-rc18-qualification
 
-      - name: Reconstruct ZIP and parse exact RC18 PowerShell scripts
-        id: parser
-        shell: pwsh
+      - name: Reconstruct exact RC18
+        shell: bash
         run: |
-          $ErrorActionPreference = 'Stop'
-          $resultDir = 'qualification/results'
-          New-Item -ItemType Directory -Force -Path $resultDir | Out-Null
-          $decodedDir = Join-Path $env:RUNNER_TEMP 'rc18-powershell'
-          $zipPath = Join-Path $env:RUNNER_TEMP 'rc18-windows.zip'
-          New-Item -ItemType Directory -Force -Path $decodedDir | Out-Null
+          set -euo pipefail
+          shopt -s nullglob
+          parts=(.ci/rc18-core.patch.b64.*)
+          test "${#parts[@]}" -eq 12
+          encoded="$(cat "${parts[@]}" | tr -d '\r\n\t ')"
+          remainder=$((${#encoded} % 4))
+          case "$remainder" in 0) ;; 2) encoded="${encoded}==" ;; 3) encoded="${encoded}=" ;; *) exit 91 ;; esac
+          printf '%s' "$encoded" | base64 --decode > "$RUNNER_TEMP/rc18.patch.gz"
+          gzip -dc "$RUNNER_TEMP/rc18.patch.gz" > "$RUNNER_TEMP/rc18.patch"
+          git apply --binary --check "$RUNNER_TEMP/rc18.patch"
+          git apply --binary "$RUNNER_TEMP/rc18.patch"
+          test -f database/078_transactional_local_upgrade.sql
 
-          $parts = @(Get-ChildItem 'qualification/windows' -Filter 'rc18-windows.part-*.b64' -File | Sort-Object Name)
-          $errors = @()
-          $parsed = 0
-          $archiveParts = $parts.Count
-
-          try {
-            if ($parts.Count -lt 1) {
-              throw 'RC18 Windows archive chunks were not found.'
-            }
-
-            $base64 = [string]::Concat(@($parts | ForEach-Object { (Get-Content -LiteralPath $_.FullName -Raw).Trim() }))
-            [IO.File]::WriteAllBytes($zipPath, [Convert]::FromBase64String($base64))
-            Expand-Archive -LiteralPath $zipPath -DestinationPath $decodedDir -Force
-
-            $scripts = @(Get-ChildItem $decodedDir -Filter '*.ps1' -File -Recurse | Sort-Object FullName)
-            if ($scripts.Count -ne 15) {
-              throw "Expected 15 RC18 PowerShell scripts in reconstructed archive, found $($scripts.Count)."
-            }
-
-            foreach ($script in $scripts) {
-              $tokens = $null
-              $parseErrors = $null
-              [System.Management.Automation.Language.Parser]::ParseFile($script.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
-              if ($parseErrors.Count -gt 0) {
-                foreach ($parseError in $parseErrors) {
-                  $errors += "$($script.Name): $($parseError.Message)"
-                }
-              }
-              $parsed += 1
-            }
-          } catch {
-            $errors += $_.Exception.Message
+      - name: Parse exact RC18 PowerShell scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference='Stop'
+          New-Item -ItemType Directory -Force qualification/results | Out-Null
+          $files=@(Get-ChildItem -Path scripts/windows -Filter *.ps1 -File | Sort-Object Name)
+          $errors=@()
+          foreach($file in $files){
+            $tokens=$null; $parseErrors=$null
+            [System.Management.Automation.Language.Parser]::ParseFile($file.FullName,[ref]$tokens,[ref]$parseErrors) | Out-Null
+            foreach($e in $parseErrors){$errors += [pscustomobject]@{file=$file.Name;message=$e.Message;line=$e.Extent.StartLineNumber;column=$e.Extent.StartColumnNumber}}
           }
+          $status=if($files.Count -eq 15 -and $errors.Count -eq 0){'PASS'}else{'FAIL'}
+          $evidence=[ordered]@{schemaVersion=3;stage='windows-powershell';status=$status;exactRc18=$true;parsedFiles=$files.Count;expectedFiles=15;sourceCommit='${{ github.sha }}';runner='Windows';generatedAt=(Get-Date).ToUniversalTime().ToString('o');errors=$errors}
+          $evidence | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 qualification/results/windows-powershell.json
+          $evidence | ConvertTo-Json -Depth 8
+          if($status -ne 'PASS'){exit 1}
 
-          $status = if ($errors.Count -eq 0 -and $parsed -eq 15) { 'PASS' } else { 'FAIL' }
-          $evidence = [ordered]@{
-            schemaVersion = 2
-            stage = 'windows-powershell'
-            status = $status
-            archiveParts = $archiveParts
-            parsedFiles = $parsed
-            expectedFiles = 15
-            sourceCommit = '${{ github.sha }}'
-            runner = '${{ runner.os }}'
-            generatedAt = (Get-Date).ToUniversalTime().ToString('o')
-            errors = @($errors)
-          }
-          $evidence | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath "$resultDir/windows-powershell.json" -Encoding UTF8
-          Get-Content -LiteralPath "$resultDir/windows-powershell.json"
-
-          if ($status -ne 'PASS') {
-            exit 1
-          }
-
-      - name: Publish parser evidence to qualification branch
+      - name: Publish parser evidence
         if: always()
-        shell: pwsh
+        shell: powershell
         run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path 'qualification/results/windows-powershell.json')) {
-            throw 'Parser evidence was not generated.'
-          }
+          $ErrorActionPreference='Stop'
+          if(-not (Test-Path qualification/results/windows-powershell.json)){throw 'Evidence missing'}
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add qualification/results/windows-powershell.json
-          $pending = git status --porcelain -- qualification/results/windows-powershell.json
-          if ($pending) {
-            git commit -m 'ci: publish RC18 Windows parser evidence [skip ci]'
-            git push origin HEAD:automation-platform-rc18-qualification
-          } else {
-            Write-Host 'Evidence unchanged; nothing to commit.'
-          }
+          git add -f qualification/results/windows-powershell.json
+          git diff --cached --quiet
+          if($LASTEXITCODE -ne 0){git commit -m 'ci: publish exact RC18 Windows parser evidence [skip ci]'; git pull --rebase origin automation-platform-rc18-qualification; git push origin HEAD:automation-platform-rc18-qualification}
