@@ -1,0 +1,58 @@
+name: RC18 PowerShell Qualification
+
+on:
+  push:
+    branches:
+      - automation-platform-rc18-qualification
+    paths:
+      - '.ci/rc18-powershell.tgz.b64'
+      - '.github/workflows/rc18-powershell-qualification.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  powershell-parser:
+    name: RC18 exact PowerShell parser
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout qualification branch
+        uses: actions/checkout@v4
+
+      - name: Reconstruct exact RC18 PowerShell bundle
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ExpectedHash = 'c31f96764979851fe605c770163b1bb6ed76fbc498da7437584aa378d844e59d'
+          $Bundle = Join-Path $PWD 'rc18-powershell.tgz'
+          $Extract = Join-Path $PWD 'rc18-powershell'
+          $Base64 = Get-Content -LiteralPath '.ci/rc18-powershell.tgz.b64' -Raw
+          [IO.File]::WriteAllBytes($Bundle, [Convert]::FromBase64String($Base64.Trim()))
+          $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Bundle).Hash.ToLowerInvariant()
+          if ($ActualHash -ne $ExpectedHash) { throw "RC18 PowerShell bundle hash mismatch: $ActualHash" }
+          New-Item -ItemType Directory -Path $Extract -Force | Out-Null
+          tar -xzf $Bundle -C $Extract
+          $Files = @(Get-ChildItem -LiteralPath (Join-Path $Extract 'scripts\windows') -Filter '*.ps1' -File -Recurse)
+          if ($Files.Count -ne 15) { throw "Expected 15 RC18 PowerShell scripts, found $($Files.Count)" }
+          "bundle_sha256=$ActualHash" | Set-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          "script_count=$($Files.Count)" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+
+      - name: Parse all RC18 PowerShell scripts with native Windows PowerShell AST
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\rc18-powershell\scripts\windows\Test-PowerShellSyntax.ps1' -DirectoryPath '.\rc18-powershell\scripts\windows'
+          if ($LASTEXITCODE -ne 0) { throw "PowerShell parser failed with exit code $LASTEXITCODE" }
+          'verdict=PASS' | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          "host=$([Environment]::OSVersion.VersionString)" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          "powershell=$($PSVersionTable.PSVersion.ToString())" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+
+      - name: Upload qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc18-powershell-qualification
+          path: powershell-qualification.txt
+          if-no-files-found: error
