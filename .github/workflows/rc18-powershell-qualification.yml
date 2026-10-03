@@ -5,7 +5,7 @@ on:
     branches:
       - automation-platform-rc18-qualification
     paths:
-      - '.ci/rc18-powershell.tgz.b64'
+      - 'scripts/windows/**'
       - '.github/workflows/rc18-powershell-qualification.yml'
   workflow_dispatch:
 
@@ -21,31 +21,28 @@ jobs:
       - name: Checkout qualification branch
         uses: actions/checkout@v4
 
-      - name: Reconstruct exact RC18 PowerShell bundle
+      - name: Inventory exact RC18 PowerShell scripts
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          $ExpectedHash = 'c31f96764979851fe605c770163b1bb6ed76fbc498da7437584aa378d844e59d'
-          $Bundle = Join-Path $PWD 'rc18-powershell.tgz'
-          $Extract = Join-Path $PWD 'rc18-powershell'
-          $Base64 = Get-Content -LiteralPath '.ci/rc18-powershell.tgz.b64' -Raw
-          $Normalized = ($Base64 -replace '[^A-Za-z0-9+/=]', '')
-          if ([string]::IsNullOrWhiteSpace($Normalized)) { throw 'RC18 PowerShell bundle Base64 is empty after normalization' }
-          [IO.File]::WriteAllBytes($Bundle, [Convert]::FromBase64String($Normalized))
-          $ActualHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Bundle).Hash.ToLowerInvariant()
-          if ($ActualHash -ne $ExpectedHash) { throw "RC18 PowerShell bundle hash mismatch: $ActualHash" }
-          New-Item -ItemType Directory -Path $Extract -Force | Out-Null
-          tar -xzf $Bundle -C $Extract
-          $Files = @(Get-ChildItem -LiteralPath (Join-Path $Extract 'scripts\windows') -Filter '*.ps1' -File -Recurse)
+          $Files = @(Get-ChildItem -LiteralPath '.\scripts\windows' -Filter '*.ps1' -File -Recurse | Sort-Object FullName)
           if ($Files.Count -ne 15) { throw "Expected 15 RC18 PowerShell scripts, found $($Files.Count)" }
-          "bundle_sha256=$ActualHash" | Set-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
-          "script_count=$($Files.Count)" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          $Lines = foreach ($File in $Files) {
+            $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $File.FullName).Hash.ToLowerInvariant()
+            $Relative = $File.FullName.Substring($PWD.Path.Length + 1).Replace('\\','/')
+            "$Hash  $Relative"
+          }
+          $Ledger = ($Lines -join "`n") + "`n"
+          [IO.File]::WriteAllText((Join-Path $PWD 'powershell-ledger.txt'), $Ledger, [Text.UTF8Encoding]::new($false))
+          $LedgerHash = (Get-FileHash -Algorithm SHA256 -LiteralPath 'powershell-ledger.txt').Hash.ToLowerInvariant()
+          "script_count=$($Files.Count)" | Set-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          "ledger_sha256=$LedgerHash" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
 
       - name: Parse all RC18 PowerShell scripts with native Windows PowerShell AST
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
-          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\rc18-powershell\scripts\windows\Test-PowerShellSyntax.ps1' -DirectoryPath '.\rc18-powershell\scripts\windows'
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File '.\scripts\windows\Test-PowerShellSyntax.ps1' -DirectoryPath '.\scripts\windows'
           if ($LASTEXITCODE -ne 0) { throw "PowerShell parser failed with exit code $LASTEXITCODE" }
           'verdict=PASS' | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
           "host=$([Environment]::OSVersion.VersionString)" | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
@@ -57,6 +54,8 @@ jobs:
         run: |
           if (-not (Test-Path -LiteralPath 'powershell-qualification.txt')) {
             'verdict=FAIL' | Set-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
+          } else {
+            'verdict=FAIL' | Add-Content -LiteralPath 'powershell-qualification.txt' -Encoding UTF8
           }
 
       - name: Upload qualification evidence
@@ -64,5 +63,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rc18-powershell-qualification
-          path: powershell-qualification.txt
+          path: |
+            powershell-qualification.txt
+            powershell-ledger.txt
           if-no-files-found: error
