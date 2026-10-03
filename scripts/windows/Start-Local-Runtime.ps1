@@ -162,6 +162,7 @@ function Wait-Http200([string]$Url, [int]$TimeoutSeconds = 90) {
   return $false
 }
 
+
 function Wait-LocalRuntimeBootReady {
   param(
     [Parameter(Mandatory = $true)][string]$Url,
@@ -323,19 +324,24 @@ function Ensure-Pnpm {
       }
     } catch { }
   }
-
   if ($pnpmOk) { return }
-  if (-not (Command-Exists "corepack.cmd")) { throw "COREPACK_NOT_AVAILABLE" }
-  Invoke-External -FilePath "corepack.cmd" -Arguments @("prepare", "pnpm@9.15.4", "--activate") -Label "preparar pnpm 9.15.4 via Corepack"
+
+  if (-not (Command-Exists "corepack.cmd")) {
+    Fail "Corepack nao encontrado na instalacao do Node.js." 11
+  }
+
   New-Item -ItemType Directory -Path $LocalBinDir -Force | Out-Null
+  Log "Criando shim local do pnpm 9.15.4 sem alterar a instalacao global do Node.js..."
+  & corepack.cmd pnpm@9.15.4 --version *> $null
+  if ($LASTEXITCODE -ne 0) { Fail "Falha ao preparar pnpm 9.15.4 via Corepack." 15 }
   @"
 @echo off
-corepack.cmd pnpm %*
+corepack.cmd pnpm@9.15.4 %*
 "@ | Set-Content -LiteralPath $PnpmShim -Encoding ASCII
   $env:PATH = "$LocalBinDir;$env:PATH"
-  $pnpmVersion = (& $PnpmShim --version 2>$null | Select-Object -First 1).Trim()
-  if ($pnpmVersion -ne "9.15.4") { throw "PNPM_VERSION_MISMATCH:$pnpmVersion" }
-  Log "pnpm 9.15.4 disponivel via shim local sem alterar a instalacao global do Node."
+  $pnpmVersion = (& pnpm.cmd --version 2>$null).Trim()
+  if ($pnpmVersion -ne "9.15.4") { Fail "Nao foi possivel ativar pnpm 9.15.4. Detectado: $pnpmVersion" 16 }
+  Log "pnpm 9.15.4 pronto via shim local; nenhuma permissao administrativa foi necessaria."
 }
 
 function Ensure-Dependencies {
