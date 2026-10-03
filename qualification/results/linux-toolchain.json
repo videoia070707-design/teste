@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 2,
+  "stage": "toolchain-dependencies",
+  "status": "FAIL",
+  "node": "v22.16.0",
+  "sourceCommit": "3e92781271c5f3ad2f1000f9aaedf21138036c1b",
+  "runner": "Linux",
+  "generatedAt": "2026-10-03T01:49:41.709Z",
+  "checks": {
+    "patch": 1,
+    "corepackEnable": 99,
+    "corepackPrepare": 99,
+    "pnpmVersion": 99,
+    "install": 99,
+    "typecheck": 99,
+    "test": 99,
+    "build": 99
+  },
+  "tails": {
+    "patch": "base64: invalid input\n",
+    "corepackEnable": "",
+    "corepackPrepare": "",
+    "pnpmVersion": "",
+    "install": "",
+    "typecheck": "",
+    "test": "",
+    "build": ""
+  }
+}
