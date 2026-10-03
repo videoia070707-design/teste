@@ -1,13 +1,13 @@
 {
-  "schemaVersion": 3,
+  "schemaVersion": 4,
   "stage": "toolchain-dependencies",
   "status": "FAIL",
   "node": "v22.16.0",
-  "sourceCommit": "4595390e4a52befd37b23f9b1fe9eb4a89d5ff91",
+  "sourceCommit": "ede49b10fef8e5b4de6aed9ba72a2bac4b7a9e12",
   "runner": "Linux",
-  "generatedAt": "2026-10-03T01:51:31.756Z",
+  "generatedAt": "2026-10-03T01:52:38.740Z",
   "checks": {
-    "patch": 1,
+    "patch": 93,
     "corepackEnable": 99,
     "corepackPrepare": 99,
     "pnpmVersion": 99,
@@ -17,7 +17,7 @@
     "build": 99
   },
   "tails": {
-    "patch": "base64: invalid input\n",
+    "patch": "base64: invalid input\nBASE64_EXIT=1 BYTES=65159\n\ngzip: /tmp/rc18-core.patch.gz: unexpected end of file\nGZIP_TEST_EXIT=1\n",
     "corepackEnable": "",
     "corepackPrepare": "",
     "pnpmVersion": "",
